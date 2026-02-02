@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>bowling_target_nav</name>
+  <version>1.0.0</version>
+  <description>
+    Vision-based target detection and autonomous navigation for bowling pin approach.
+    Modular design allows swapping detection backends (YOLO, custom binary, etc.)
+  </description>
+  <maintainer email="robot@rzv2n.local">RZ/V2N Robot</maintainer>
+  <license>MIT</license>
+
+  <!-- Build type: ament_python for pure Python package -->
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- ROS2 Core -->
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+
+  <!-- Navigation -->
+  <exec_depend>nav2_msgs</exec_depend>
+
+  <!-- Mapping (Cartographer) -->
+  <exec_depend>cartographer_ros</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+
+  <!-- LiDAR Driver -->
+  <exec_depend>rplidar_ros</exec_depend>
+
+  <!-- Diagnostics -->
+  <depend>diagnostic_msgs</depend>
+
+  <!-- Python dependencies (installed via pip on V2N) -->
+  <!-- opencv-python, numpy, pyserial -->
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

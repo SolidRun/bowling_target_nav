@@ -1,0 +1,25 @@
+[Unit]
+Description=V2N Robot Auto-Start (ROS2 Bowling Target Nav)
+After=network.target multi-user.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ros2_ws/src/bowling_target_nav/scripts
+ExecStartPre=/bin/sleep 5
+ExecStart=/root/ros2_ws/src/bowling_target_nav/scripts/robot_autostart.sh
+ExecStop=/bin/bash -c 'pkill -f "ros2 launch bowling" || true; pkill -f arduino_driver || true; pkill -f rplidar || true'
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+Environment="HOME=/root"
+Environment="ROS_DOMAIN_ID=0"
+Environment="ROS_LOCALHOST_ONLY=0"
+Environment="XDG_RUNTIME_DIR=/run/user/996"
+Environment="WAYLAND_DISPLAY=wayland-1"
+
+[Install]
+WantedBy=multi-user.target

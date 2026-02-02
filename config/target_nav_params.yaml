@@ -1,0 +1,111 @@
+# =============================================================================
+# Bowling Target Navigation Parameters
+# =============================================================================
+#
+# This file contains all tunable parameters for the target navigation system.
+# Adjust these values based on your robot and environment.
+#
+# Usage:
+#   ros2 launch bowling_target_nav bowling_target_nav.launch.py
+#   ros2 launch bowling_target_nav bowling_target_nav.launch.py \
+#       params_file:=/path/to/custom_params.yaml
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Vision Node Parameters
+# -----------------------------------------------------------------------------
+vision_node:
+  ros__parameters:
+    # Detector Configuration
+    # -----------------------
+    # detector_type: Which detection backend to use
+    #   - "yolo": Use YOLOv5 ONNX model (current implementation)
+    #   - "binary": Use external binary application (future)
+    detector_type: "yolo"
+
+    # Path to YOLO model (leave empty to auto-find)
+    model_path: ""
+
+    # Path to binary detector application (for future use)
+    binary_path: ""
+
+    # Camera Configuration
+    # --------------------
+    camera_index: 0           # /dev/video0
+    frame_width: 640          # Camera width
+    frame_height: 480         # Camera height
+    horizontal_fov: 60.0      # Camera field of view (degrees)
+
+    # Detection Parameters
+    # --------------------
+    # target_class: Which class to track
+    # Available classes for bowling model: "Pin+Ball", "Ball", "Pins", "Sweep"
+    target_class: "Pins"
+
+    # Minimum confidence threshold (0.0 - 1.0)
+    conf_threshold: 0.25
+
+    # Distance Estimation (CALIBRATION REQUIRED)
+    # ------------------------------------------
+    # To calibrate:
+    #   1. Place bowling pin at exactly 1.0 meter from camera
+    #   2. Run vision node and check /target_detection topic
+    #   3. Note the bounding box height in pixels
+    #   4. Set reference_box_height to that value
+    #
+    # Example: If pin at 1m has box height of 120 pixels:
+    #   reference_box_height: 120.0
+    #   reference_distance: 1.0
+    reference_box_height: 100.0   # pixels at reference_distance
+    reference_distance: 1.0       # meters
+
+    # Publishing
+    # ----------
+    publish_rate: 10.0        # Hz (detection frequency)
+    base_frame: "base_link"   # Frame for published pose
+
+    # Debug
+    enable_visualization: true
+
+# -----------------------------------------------------------------------------
+# Target Follower Node Parameters
+# -----------------------------------------------------------------------------
+target_follower_node:
+  ros__parameters:
+    # Operation Mode
+    # --------------
+    # mode: How to control robot motion
+    #   - "direct": Direct velocity control (simple, no Nav2 needed)
+    #   - "nav2": Send goals to Nav2 for path planning with obstacle avoidance
+    mode: "direct"
+
+    # Enable/disable following (useful for testing vision only)
+    enabled: true
+
+    # Approach Behavior
+    # -----------------
+    approach_distance: 0.3    # meters - stop this far from target
+
+    # Motion Limits
+    # -------------
+    linear_speed: 0.15        # m/s - maximum forward speed
+    angular_speed: 0.3        # rad/s - maximum rotation speed
+
+    # Target Lost Behavior
+    # --------------------
+    lost_timeout: 2.0         # seconds - time before searching
+    search_angular_vel: 0.2   # rad/s - rotation speed while searching
+
+    # Obstacle Avoidance (direct mode only)
+    # -------------------------------------
+    obstacle_distance: 0.25   # meters - stop if obstacle closer
+
+    # Control Tolerances
+    # ------------------
+    angle_tolerance: 0.1      # radians - angle error for "centered"
+
+    # Frame Configuration (nav2 mode)
+    # --------------------------------
+    goal_frame: "odom"        # Frame for Nav2 goals
+    robot_frame: "base_link"  # Robot base frame

@@ -1,0 +1,71 @@
+# ROS2 Build artifacts
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+dist/
+.eggs/
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.cproject
+.pydevproject
+
+# Logs
+*.log
+/var/log/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Model files (large binaries - keep in repo or download separately)
+# models/*.onnx
+# models/*.pt
+
+# Bag files
+*.bag
+*.db3
+
+# Map files (generated)
+*.pgm
+*.yaml.bak
+
+# Credentials and secrets
+.env
+*.key
+*.pem
+credentials/
+
+# Compiled messages
+*.msg.stamp
+*.srv.stamp
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
