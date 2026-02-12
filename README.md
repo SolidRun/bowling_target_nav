@@ -1,319 +1,276 @@
 # Bowling Target Navigation - RZ/V2N
 
-SLAM mapping + Camera with YOLO detection + PC Remote Control for RZ/V2N robot.
+SLAM mapping + Camera with YOLO detection + Autonomous navigation for RZ/V2N robot.
 
-**Auto-start enabled**: Robot starts automatically on boot with GUI, SLAM, and camera.
+**One script does everything**: Setup, autostart service, and GUI with navigation.
 
-## Quick Start
+## Documentation
 
-### On V2N (Robot)
+| Guide | Description |
+|-------|-------------|
+| [Quick Start Guide](docs/quick_start_guide.html) | Setup, commands, and examples - get running fast |
+| [Technical Guide](docs/technical_guide.html) | How it works, architecture, calibration, limitations |
 
-The robot **starts automatically on boot** with:
+## Quick Start on V2N
+
+### First Time Setup (One Command)
+
+```bash
+# From V2N - run the master setup script
+cd ~/ros2_ws/src/bowling_target_nav/scripts
+./v2n_master_setup.sh
+```
+
+This single command will:
+1. Build the ROS2 package
+2. Install autostart service (robot starts on boot)
+3. Start the GUI with SLAM + Camera + Navigation
+
+### Daily Usage
+
+After first setup, the robot **starts automatically on boot** with:
 - GUI showing camera feed + SLAM map
-- All ROS2 nodes ready for PC connection
-- Arduino, LiDAR, and camera initialized
+- "GO" button to navigate to detected bowling pins
+- Obstacle avoidance using LiDAR
 
-To manually control:
+To manually start/stop:
 ```bash
-ssh root@192.168.50.1
-systemctl status robot    # Check status
-systemctl restart robot   # Restart if needed
+./v2n_master_setup.sh --start   # Start GUI
+./v2n_master_setup.sh --stop    # Stop everything
+./v2n_master_setup.sh --status  # Check status
 ```
 
-### On PC (Remote Control)
+## GUI Controls
 
-```bash
-# 1. Connect to V2N WiFi network
-# 2. Run the controller
-cd ~/ros2_ws/src/bowling_target_nav/tools
-./run_controller.sh
-```
+The main GUI shows:
+- **Left panel**: SLAM map with robot position and LiDAR points
+- **Right panel**: Camera feed with YOLO detection (bowling pins highlighted)
+- **Bottom**: Control buttons
+
+| Control | Action |
+|---------|--------|
+| **GO button** / G key | Navigate to detected bowling pins |
+| **STOP button** / Space | Emergency stop |
+| Q / ESC | Quit |
 
 ## Installation on New V2N
 
-### Quick One-Liner (Recommended)
+### From PC (Copy + Setup)
 
 ```bash
-# From your PC - copies package and sets up with auto-start
-scp -r bowling_target_nav root@192.168.50.1:~/ros2_ws/src/ && \
-ssh root@192.168.50.1 "cd ~/ros2_ws/src/bowling_target_nav/scripts && chmod +x *.sh && ./v2n_setup.sh --autostart"
-```
-
-### Manual Setup
-
-```bash
-# Step 1: Copy package to V2N
+# 1. Connect to V2N WiFi network
+# 2. Copy package and run setup
 scp -r bowling_target_nav root@192.168.50.1:~/ros2_ws/src/
-
-# Step 2: SSH and run setup
-ssh root@192.168.50.1
-cd ~/ros2_ws/src/bowling_target_nav/scripts
-chmod +x *.sh
-./v2n_setup.sh           # Without auto-start
-# OR
-./v2n_setup.sh --autostart  # With auto-start on boot
+ssh root@192.168.50.1 "cd ~/ros2_ws/src/bowling_target_nav/scripts && chmod +x *.sh && ./v2n_master_setup.sh"
 ```
 
-### Using Tar Archive (Faster Transfer)
+### What the Setup Does
+
+1. Verifies ROS2 Humble is installed
+2. Builds the package with colcon
+3. Installs systemd service for auto-start
+4. Starts the GUI
+
+## PC Remote Control
+
+From your PC, you can control the robot remotely:
 
 ```bash
-# Create and copy archive
-cd /path/to/ros2_ws/src
-tar czf bowling_nav.tar.gz bowling_target_nav
-scp bowling_nav.tar.gz root@192.168.50.1:/tmp/
-
-# Extract and setup on V2N
-ssh root@192.168.50.1 "cd ~/ros2_ws/src && tar xzf /tmp/bowling_nav.tar.gz && cd bowling_target_nav/scripts && chmod +x *.sh && ./v2n_setup.sh --autostart"
-```
-
-### What v2n_setup.sh Does
-
-The setup script performs these steps automatically:
-
-1. **Verifies ROS2** - Checks ROS2 Humble is installed
-2. **Creates workspace** - Creates ~/ros2_ws if it doesn't exist
-3. **Makes scripts executable** - chmod +x on all .sh and .py files
-4. **Builds package** - colcon build with symlink-install
-5. **Checks hardware** - Verifies Arduino, LiDAR, Camera connections
-6. **Verifies ROS2 registration** - Confirms package is registered
-7. **Installs autostart** (with --autostart flag) - Enables boot service
-
-After setup, the V2N will automatically start all services on boot.
-
-## Hardware Requirements
-
-- **Arduino**: Motor controller on `/dev/ttyACM0` (Mecanum 4WD)
-- **LiDAR**: RPLidar A1 on `/dev/ttyUSB0`
-- **Camera**: USB camera on `/dev/video0` (optional)
-- **Display**: Wayland/Weston (HDMI) for GUI
-
-## Commands
-
-### Start Robot (V2N)
-
-```bash
-# Basic - just motor control (for PC remote control)
-~/ros2_ws/src/bowling_target_nav/scripts/start_robot.sh
-
-# Full - with SLAM mapping
-~/ros2_ws/src/bowling_target_nav/scripts/start_robot.sh --full
-
-# Stop all
-~/ros2_ws/src/bowling_target_nav/scripts/start_robot.sh --stop
-
-# GUI with SLAM + Camera (on V2N display)
-~/ros2_ws/src/bowling_target_nav/scripts/setup_and_run.sh
-```
-
-### PC Controller
-
-```bash
-# Auto-setup ROS2 and run GUI
+# 1. Connect to V2N WiFi network
+# 2. Run controller
 cd tools/
 ./run_controller.sh
 ```
 
-**Controls:**
-- **WASD** or **Arrow Keys**: Move robot
-- **Q/E**: Rotate left/right
-- **Space**: Emergency stop
-- **Release key**: Stops movement
-- **Sliders**: Adjust speed
-- **Calibrate**: Send SYNC command to Arduino
-- **Read/Reset Encoders**: Encoder commands
-- **Manual**: Send custom Arduino commands
+**PC Controller Features:**
+- WASD / Arrow Keys: Move robot
+- Q/E: Rotate left/right
+- Space: Emergency stop
+- Speed sliders
+- Arduino commands (SYNC, encoder read/reset)
 
-## Auto-Start on Boot
+## Hardware Requirements
 
-The robot automatically starts all services when V2N powers on (~20 seconds boot time).
+| Device | Port | Description |
+|--------|------|-------------|
+| Arduino | `/dev/ttyACM0` | Motor controller (Mecanum 4WD) |
+| LiDAR | `/dev/ttyUSB0` | RPLidar A1 for SLAM |
+| Camera | `/dev/video0` | USB camera for YOLO detection |
+| Display | HDMI | Wayland/Weston for GUI |
 
-**What starts automatically:**
-- Arduino driver (motor control)
-- LiDAR driver (RPLidar)
-- Odometry node
-- SLAM mapping (Cartographer)
-- GUI with camera + YOLO detection
+## Service Commands
 
-**Install autostart (if not already enabled):**
 ```bash
-ssh root@192.168.50.1
-cd ~/ros2_ws/src/bowling_target_nav/scripts
-./install_autostart.sh
+systemctl status robot      # Check status
+systemctl start robot       # Start robot
+systemctl stop robot        # Stop robot
+systemctl restart robot     # Restart robot
+journalctl -u robot -f      # View logs
 ```
 
-**Service Commands:**
-```bash
-systemctl status robot     # Check status
-systemctl restart robot    # Restart
-systemctl stop robot       # Stop
-journalctl -u robot -f     # View logs
-./install_autostart.sh --remove  # Disable autostart
-```
+## ROS2 Topics
 
-**ROS2 Topics Available:**
-- `/cmd_vel` - Velocity commands (for PC controller)
-- `/arduino/cmd` - Direct Arduino commands (SYNC, READ, RESET)
-- `/arduino/status` - Arduino connection status
-- `/scan` - LiDAR data
-- `/odom` - Odometry
-- `/map` - SLAM map
-
-## Package Contents
-
-```
-bowling_target_nav/
-├── bowling_target_nav/
-│   ├── nodes/
-│   │   ├── slam_camera_gui.py    # V2N GUI (SLAM + Camera + YOLO)
-│   │   ├── arduino_driver_node.py # Motor control via Arduino
-│   │   └── odometry_node.py       # Wheel odometry
-│   ├── hardware/
-│   │   └── arduino_bridge.py      # Arduino serial communication
-│   ├── detectors/
-│   │   └── yolo_detector.py       # YOLO detection
-│   └── utils/
-│       └── distance_estimator.py  # Distance estimation
-├── config/
-│   ├── cartographer.lua           # SLAM configuration
-│   └── target_nav_params.yaml
-├── launch/
-│   ├── bringup.launch.py          # LiDAR + Arduino + Odometry
-│   └── mapping.launch.py          # Cartographer SLAM
-├── scripts/
-│   ├── start_robot.sh             # Start robot for remote control
-│   ├── setup_and_run.sh           # Full GUI setup
-│   ├── run_slam_camera.sh         # SLAM + Camera GUI
-│   ├── v2n_setup.sh               # New V2N installation
-│   ├── robot_autostart.sh         # Auto-start script (systemd)
-│   ├── robot.service              # Systemd service file
-│   └── install_autostart.sh       # Install/remove autostart
-├── tools/
-│   ├── pc_robot_controller.py     # PC GUI controller
-│   └── run_controller.sh          # PC setup + run script
-└── models/
-    └── bowling_yolov5.onnx        # YOLO model (optional)
-```
+| Topic | Description |
+|-------|-------------|
+| `/cmd_vel` | Velocity commands |
+| `/scan` | LiDAR data |
+| `/map` | SLAM map |
+| `/odom` | Odometry |
+| `/arduino/cmd` | Arduino commands |
 
 ## Troubleshooting
 
-### Robot Not Responding to Commands
+### Robot Not Responding
 
 ```bash
-# Check if Arduino is connected
-ls -la /dev/ttyACM0
+# Check hardware
+ls -la /dev/ttyACM0 /dev/ttyUSB0 /dev/video0
 
-# Kill processes holding the port
-fuser -k /dev/ttyACM0
-
-# Restart robot
-~/ros2_ws/src/bowling_target_nav/scripts/start_robot.sh --stop
-~/ros2_ws/src/bowling_target_nav/scripts/start_robot.sh
+# Release ports and restart
+./v2n_master_setup.sh --stop
+./v2n_master_setup.sh --start
 ```
 
-### PC Controller Not Connecting
+### GUI Not Starting
 
 ```bash
-# Verify V2N is reachable
-ping 192.168.50.1
-
-# Check ROS2 topics on V2N
-ssh root@192.168.50.1 "source /opt/ros/humble/setup.bash && ros2 topic list"
-
-# Should see:
-#   /cmd_vel
-#   /arduino/status
-#   /scan
-#   /odom
-```
-
-### LiDAR Timeout Error
-
-```bash
-# Release LiDAR port
-fuser -k /dev/ttyUSB0
-
-# Check device
-ls -la /dev/ttyUSB0
-```
-
-### Camera Busy
-
-```bash
-fuser -k /dev/video0
-```
-
-### GUI Not Starting on Boot
-
-```bash
-# Check service status
-systemctl status robot
-
-# View service logs
+# Check service logs
 journalctl -u robot -n 50
 
-# Manually start
-systemctl start robot
-
-# If service file is missing, reinstall
-cd ~/ros2_ws/src/bowling_target_nav/scripts
-./install_autostart.sh
-```
-
-### Map Not Showing in GUI
-
-The map requires TRANSIENT_LOCAL QoS. If "Waiting for map..." appears:
-```bash
-# Restart the service
-systemctl restart robot
-
-# Verify map topic
-ros2 topic echo /map --once
+# Manual start for debugging
+./v2n_master_setup.sh --start
 ```
 
 ### Rebuild Package
 
 ```bash
-cd ~/ros2_ws
-rm -rf build/bowling_target_nav install/bowling_target_nav
-colcon build --packages-select bowling_target_nav --symlink-install
-source install/setup.bash
-```
-
-## Network Configuration
-
-V2N default IP: `192.168.50.1` (WiFi hotspot)
-
-Connect to V2N WiFi network, then:
-```bash
-ssh root@192.168.50.1
+./v2n_master_setup.sh --build
 ```
 
 ## Features
 
-- **Auto-Start on Boot**: Robot ready in ~20 seconds after power on
-- **Mecanum Drive**: Full omnidirectional control (forward, strafe, rotate)
-- **SLAM Mapping**: Real-time 2D map using Cartographer + RPLidar
-- **YOLO Detection**: Bowling pin detection with distance estimation
-- **PC Remote Control**: Control robot via WiFi from your PC
-- **GUI on V2N**: Fullscreen display with camera feed + SLAM map
-- **Arduino Commands**: Calibration, encoder read/reset from PC GUI
-- **Arduino Protocol**: Plain text commands (FWD, BWD, LEFT, RIGHT, TURN, STOP, SYNC)
-- **Fast Startup**: Optimized boot sequence (~20 seconds)
-- **Thread-safe**: Proper locking, timeout protection, clean shutdown
+- **Auto-Start on Boot**: Robot ready in ~20 seconds
+- **Unified GUI**: Map + Camera + Navigation in one window
+- **Pluggable Detection**: Swap between YOLO ONNX and V2N DRP binary
+- **GO Button**: One-click navigation to detected targets
+- **Obstacle Avoidance**: LiDAR-based path planning
+- **SLAM Mapping**: Real-time 2D map using Cartographer
+- **Mecanum Drive**: Full omnidirectional control
+- **PC Remote Control**: WiFi control from your PC
+- **State Machine**: Clean state management (IDLE, DETECTING, NAVIGATING, etc.)
+- **Configuration-Driven**: YAML config with environment variable overrides
+- **Mock Components**: Test without hardware using mock implementations
 
-## Technical Notes
+## Detection Backends
 
-**ROS2 Communication:**
-- Uses `rmw_fastrtps_cpp` middleware for PC-V2N communication
-- FastDDS XML config for WiFi peer discovery (192.168.50.1)
-- ROS_DOMAIN_ID=0 for cross-machine communication
+Switch between detection backends via config or environment variable:
 
-**Camera:**
-- Uses V4L2 backend directly (cv2.CAP_V4L2) - GStreamer has issues on V2N
+| Backend | Description | Config Value |
+|---------|-------------|--------------|
+| YOLO ONNX | Default, uses ONNX Runtime | `yolo_onnx` |
+| DRP Binary | V2N hardware accelerated | `drp_binary` |
+| Mock | Testing without camera | `mock` |
 
-**Map Subscription:**
-- Uses TRANSIENT_LOCAL QoS to match Cartographer's map publisher
+```bash
+# Switch to DRP binary
+export V2N_DETECTOR_TYPE=drp_binary
 
-**Arduino Protocol:**
-- Plain text commands: `CMD,speed,ticks\n` (e.g., `FWD,100,1000`)
-- Wait for "READY" message after serial connect (Arduino resets on connect)
+# Or edit config/robot_config.yaml:
+# detection:
+#   detector_type: "drp_binary"
+```
+
+## Testing
+
+Comprehensive test suite with debug output and interactive GUIs.
+
+### Run Tests
+
+```bash
+cd scripts/
+./run_tests.sh              # Run all tests
+./run_tests.sh arduino      # Arduino tests only
+./run_tests.sh lidar        # LiDAR tests only
+./run_tests.sh camera       # Camera + YOLO tests only
+./run_tests.sh integration  # LiDAR + Camera tests
+./run_tests.sh system       # Full system tests
+./run_tests.sh --check      # Check hardware availability
+```
+
+### Interactive Test GUIs
+
+```bash
+./run_tests.sh --gui                # Full system control GUI
+./run_tests.sh --visualize-lidar    # LiDAR visualization
+./run_tests.sh --visualize-camera   # Camera detection demo
+./run_tests.sh --visualize-fusion   # Sensor fusion view
+```
+
+### Test Files
+
+| Test | Description |
+|------|-------------|
+| `test_arduino.py` | Arduino motor controller tests |
+| `test_lidar.py` | LiDAR sensor tests |
+| `test_camera.py` | Camera and YOLO detection tests |
+| `test_lidar_camera.py` | Sensor fusion tests |
+| `test_full_system.py` | Complete system tests with GUI |
+
+## Package Structure
+
+```
+bowling_target_nav/
+├── bowling_target_nav/
+│   ├── core/                     # Core infrastructure
+│   │   ├── config.py             # Configuration management
+│   │   ├── state_machine.py      # Robot state machine
+│   │   └── events.py             # Event bus
+│   ├── detectors/                # Pluggable detection (Strategy pattern)
+│   │   ├── base.py               # Abstract DetectorBase
+│   │   ├── yolo_onnx_detector.py # YOLO ONNX implementation
+│   │   ├── drp_binary_detector.py# V2N DRP binary support
+│   │   ├── mock_detector.py      # Mock for testing
+│   │   └── factory.py            # DetectorFactory
+│   ├── hardware/                 # Hardware abstractions
+│   │   ├── arduino.py            # Arduino (real + mock)
+│   │   ├── camera.py             # Camera (real + mock)
+│   │   └── lidar.py              # LiDAR (real + mock)
+│   ├── nodes/
+│   │   └── main_gui.py           # Main unified GUI
+│   └── utils/
+│       └── distance_estimator.py
+├── test/
+│   ├── unit/                     # Unit tests (no hardware)
+│   │   ├── test_config.py
+│   │   ├── test_state_machine.py
+│   │   ├── test_detectors.py
+│   │   └── test_hardware.py
+│   └── hardware/                 # Hardware integration tests
+│       ├── test_arduino.py
+│       ├── test_lidar.py
+│       └── test_camera.py
+├── docs/
+│   ├── quick_start_guide.html    # Quick setup & commands
+│   └── technical_guide.html      # Detailed documentation
+├── config/
+│   ├── robot_config.yaml         # Main YAML configuration
+│   └── cartographer.lua
+├── scripts/
+│   ├── v2n_master_setup.sh       # ONE SCRIPT FOR EVERYTHING
+│   └── run_tests.sh              # Test runner
+├── launch/
+│   ├── bringup.launch.py
+│   └── mapping.launch.py
+├── tools/
+│   └── pc_robot_controller.py
+└── models/
+    └── bowling_yolov5.onnx
+```
+
+## Network
+
+V2N IP: `192.168.50.1` (WiFi hotspot)
+
+```bash
+ssh root@192.168.50.1
+```

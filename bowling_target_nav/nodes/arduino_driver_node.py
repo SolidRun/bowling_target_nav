@@ -21,10 +21,8 @@ Topics:
 Parameters:
     serial_port (str): Serial port path [default: /dev/ttyACM0]
     baudrate (int): Serial baudrate [default: 115200]
-    linear_scale (float): m/s to mm/s conversion [default: 1000.0]
-    angular_scale (float): rad/s to mrad/s conversion [default: 1000.0]
-    max_linear_vel (float): Max linear velocity mm/s [default: 200.0]
-    max_angular_vel (float): Max angular velocity mrad/s [default: 200.0]
+    max_linear_speed (float): Max linear speed in m/s at PWM 255 [default: 0.436]
+    max_angular_speed (float): Max angular speed in rad/s at PWM 255 [default: 2.18]
     command_rate (float): Command publish rate Hz [default: 20.0]
     command_timeout (float): Stop if no cmd_vel for this long [default: 0.5]
     enable_diagnostics (bool): Publish diagnostics [default: true]
@@ -47,7 +45,7 @@ from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 
-from bowling_target_nav.hardware import ArduinoBridge, ArduinoConfig, ArduinoState
+from bowling_target_nav.hardware.arduino_bridge import ArduinoBridge, ArduinoConfig, ArduinoState
 
 
 class ArduinoDriverNode(Node):
@@ -64,13 +62,16 @@ class ArduinoDriverNode(Node):
         # Get parameters
         self.serial_port = self.get_parameter('serial_port').value
         self.baudrate = self.get_parameter('baudrate').value
-        self.linear_scale = self.get_parameter('linear_scale').value
-        self.angular_scale = self.get_parameter('angular_scale').value
-        self.max_linear_vel = self.get_parameter('max_linear_vel').value
-        self.max_angular_vel = self.get_parameter('max_angular_vel').value
+        self.max_linear_speed = self.get_parameter('max_linear_speed').value
+        self.max_angular_speed = self.get_parameter('max_angular_speed').value
         self.command_rate = self.get_parameter('command_rate').value
         self.command_timeout = self.get_parameter('command_timeout').value
         self.enable_diagnostics = self.get_parameter('enable_diagnostics').value
+
+        # Velocity to PWM conversion factors
+        # Firmware VEL command takes PWM values (-255..255)
+        self.pwm_per_mps = 255.0 / self.max_linear_speed      # ~585
+        self.pwm_per_radps = 255.0 / self.max_angular_speed    # ~117
 
         # State tracking
         self._last_cmd_vel_time: Optional[float] = None
@@ -170,19 +171,18 @@ class ArduinoDriverNode(Node):
         """Declare all ROS2 parameters."""
         self.declare_parameter('serial_port', '/dev/ttyACM0')
         self.declare_parameter('baudrate', 115200)
-        self.declare_parameter('linear_scale', 1000.0)   # m/s -> mm/s
-        self.declare_parameter('angular_scale', 1000.0)  # rad/s -> mrad/s
-        self.declare_parameter('max_linear_vel', 200.0)  # mm/s
-        self.declare_parameter('max_angular_vel', 200.0) # mrad/s
-        self.declare_parameter('command_rate', 20.0)     # Hz
-        self.declare_parameter('command_timeout', 0.5)   # seconds
+        # Max robot speed at PWM 255 (from firmware: wheel_diam=80mm, CPR=4320, max_tickrate=150)
+        self.declare_parameter('max_linear_speed', 0.436)   # m/s at PWM 255
+        self.declare_parameter('max_angular_speed', 2.18)   # rad/s at PWM 255
+        self.declare_parameter('command_rate', 20.0)        # Hz (must be ≥5 for 200ms watchdog)
+        self.declare_parameter('command_timeout', 0.5)      # seconds
         self.declare_parameter('enable_diagnostics', True)
 
     def _cmd_vel_callback(self, msg: Twist):
         """Handle incoming velocity commands."""
         self._last_cmd_vel = msg
         self._last_cmd_vel_time = time.time()
-        self.get_logger().info(f'Received cmd_vel: x={msg.linear.x:.2f}, y={msg.linear.y:.2f}, z={msg.angular.z:.2f}')
+        self.get_logger().debug(f'cmd_vel: x={msg.linear.x:.2f}, y={msg.linear.y:.2f}, wz={msg.angular.z:.2f}')
 
     def _arduino_cmd_callback(self, msg: String):
         """Handle direct Arduino commands (SYNC, READ, RESET, etc.)."""
@@ -197,19 +197,39 @@ class ArduinoDriverNode(Node):
             self.get_logger().warn(f'Failed to send Arduino command: {command}')
 
     def _handle_arduino_response(self, command: str, args: list):
-        """Handle responses from Arduino."""
+        """Handle responses from Arduino.
+
+        Firmware sends:
+        - ODOM,vx,vy,wz  (velocity mode, 20Hz) - forward kinematics from encoder deltas
+        - ENC,FL:xxx,FR:xxx,RL:xxx,RR:xxx,t_us:xxx  (position mode + idle)
+        """
         if command == "ODOM":
-            # Forward raw odometry data
+            # Firmware sends: ODOM,vx,vy,wz (encoder-derived velocities)
             msg = String()
             msg.data = json.dumps({
-                'command': command,
-                'args': args,
+                'command': 'ODOM',
+                'args': [float(a) for a in args if a.lstrip('-').isdigit()],
                 'timestamp': time.time()
             })
             self.odom_raw_pub.publish(msg)
 
-        elif command == "STATUS":
-            self.get_logger().debug(f"Arduino status: {args}")
+        elif command == "ENC":
+            # Firmware sends: ENC,FL:1234,FR:5678,RL:9012,RR:3456,t_us:123456
+            enc_data = {}
+            for part in args:
+                if ':' in part:
+                    key, val = part.split(':', 1)
+                    try:
+                        enc_data[key] = int(val)
+                    except ValueError:
+                        enc_data[key] = val
+            msg = String()
+            msg.data = json.dumps({
+                'command': 'ENC',
+                'args': enc_data,
+                'timestamp': time.time()
+            })
+            self.odom_raw_pub.publish(msg)
 
         elif command == "ERROR":
             self.get_logger().warn(f"Arduino error: {args}")
@@ -251,19 +271,18 @@ class ArduinoDriverNode(Node):
             self.bridge.send_stop()
             return
 
-        # Convert and clamp velocities (mecanum: x=forward, y=strafe, z=rotation)
-        vx_mm = int(self._last_cmd_vel.linear.x * self.linear_scale)
-        vy_mm = int(self._last_cmd_vel.linear.y * self.linear_scale)
-        wz_mrad = int(self._last_cmd_vel.angular.z * self.angular_scale)
+        # Convert m/s and rad/s to PWM values (-255..255) for firmware VEL command
+        vx_pwm = int(self._last_cmd_vel.linear.x * self.pwm_per_mps)
+        vy_pwm = int(self._last_cmd_vel.linear.y * self.pwm_per_mps)
+        wz_pwm = int(self._last_cmd_vel.angular.z * self.pwm_per_radps)
 
-        # Apply limits
-        vx_mm = max(-self.max_linear_vel, min(self.max_linear_vel, vx_mm))
-        vy_mm = max(-self.max_linear_vel, min(self.max_linear_vel, vy_mm))
-        wz_mrad = max(-self.max_angular_vel, min(self.max_angular_vel, wz_mrad))
+        # Clamp to valid PWM range
+        vx_pwm = max(-255, min(255, vx_pwm))
+        vy_pwm = max(-255, min(255, vy_pwm))
+        wz_pwm = max(-255, min(255, wz_pwm))
 
-        # Send to Arduino (full mecanum velocity)
-        self.get_logger().info(f'Sending to Arduino: vx={vx_mm}, vy={vy_mm}, wz={wz_mrad}')
-        result = self.bridge.send_velocity(int(vx_mm), int(vy_mm), int(wz_mrad))
+        # Send to Arduino (firmware VEL command takes PWM-scale values)
+        result = self.bridge.send_velocity(vx_pwm, vy_pwm, wz_pwm)
         if not result:
             self.get_logger().warn('Failed to send velocity command to Arduino')
 

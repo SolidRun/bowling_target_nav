@@ -1,0 +1,208 @@
+# =============================================================================
+# V2N Robot Configuration
+# =============================================================================
+# This file contains all configurable parameters for the robot system.
+# Modify values here instead of changing code.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Detection Configuration
+# -----------------------------------------------------------------------------
+detection:
+  # Detector type: "yolo_onnx" | "drp_binary" | "mock"
+  detector_type: "yolo_onnx"
+
+  # Confidence threshold for detections (0.0 - 1.0)
+  confidence_threshold: 0.5
+
+  # Target class to detect
+  target_class: "bowling-pins"
+
+  # Only detect these classes (bowling pin related)
+  filter_classes: ["bowling-pins", "Bowlingpin-bowlingball"]
+
+  # Detection rate limit (max detections per second)
+  max_detection_rate: 10
+
+  # YOLO ONNX specific settings
+  yolo_onnx:
+    model_path: "models/bowling_yolov5.onnx"
+    input_size: [320, 320]
+    # Class names in model (auto-detected from ONNX metadata)
+    class_names: ["Bowlingpin-bowlingball", "bowling-ball", "bowling-pins", "sweep board"]
+
+  # V2N DRP Binary application settings
+  drp_binary:
+    # Path to DRP application binary
+    binary_path: "/opt/drp/bowling_detector"
+    # Input image path (shared memory or file)
+    input_method: "shared_memory"  # "shared_memory" | "file"
+    input_path: "/dev/shm/camera_frame"
+    # Output method
+    output_method: "shared_memory"  # "shared_memory" | "file" | "stdout"
+    output_path: "/dev/shm/detection_result"
+    # Timeout for binary execution (seconds)
+    timeout: 1.0
+
+# -----------------------------------------------------------------------------
+# Camera Configuration
+# -----------------------------------------------------------------------------
+camera:
+  device_id: 0
+  device_path: "/dev/video0"
+  width: 640
+  height: 480
+  fps: 30
+  # Auto-reconnect on failure
+  auto_reconnect: true
+  reconnect_delay: 1.0
+
+# -----------------------------------------------------------------------------
+# LiDAR Configuration
+# -----------------------------------------------------------------------------
+lidar:
+  device_path: "/dev/ttyUSB0"
+  baudrate: 115200
+  # Scan parameters
+  min_angle: -180.0  # degrees
+  max_angle: 180.0   # degrees
+  min_range: 0.15    # meters
+  max_range: 12.0    # meters
+  # Auto-reconnect on failure
+  auto_reconnect: true
+  reconnect_delay: 2.0
+
+# -----------------------------------------------------------------------------
+# Arduino/Motor Configuration
+# -----------------------------------------------------------------------------
+arduino:
+  device_path: "/dev/ttyACM0"
+  baudrate: 115200
+  # Communication timeout (seconds)
+  timeout: 0.5
+  # Sync interval (seconds)
+  sync_interval: 5.0
+  # Auto-reconnect on failure
+  auto_reconnect: true
+  reconnect_delay: 1.0
+
+# -----------------------------------------------------------------------------
+# Navigation Configuration
+# -----------------------------------------------------------------------------
+navigation:
+  # Speed limits (m/s and rad/s)
+  max_linear_speed: 0.3
+  max_angular_speed: 0.5
+
+  # Default navigation speeds
+  default_linear_speed: 0.15
+  default_angular_speed: 0.3
+
+  # Obstacle avoidance
+  obstacle_distance_threshold: 0.4  # meters
+  obstacle_slowdown_distance: 0.8   # meters
+
+  # Target approach
+  target_reached_distance: 0.3      # meters
+
+  # Search behavior when target lost
+  search:
+    enabled: true
+    lost_timeout: 10.0              # seconds before starting search
+    search_timeout: 30.0            # seconds before giving up
+    angular_speed: 0.25             # rad/s during search rotation
+
+  # Smoothing
+  velocity_smoothing: true
+  smoothing_factor: 0.3
+
+# -----------------------------------------------------------------------------
+# Distance Estimation Configuration
+# -----------------------------------------------------------------------------
+distance_estimation:
+  # Method: "bbox_height" | "bbox_area" | "depth_camera"
+  method: "bbox_height"
+
+  # Bounding box height method parameters
+  bbox_height:
+    focal_length: 500.0             # Camera focal length in pixels
+    real_object_height: 0.38        # Real bowling pin height in meters
+
+  # Bounding box area method parameters
+  bbox_area:
+    reference_area: 10000           # Reference bbox area at 1 meter
+
+# -----------------------------------------------------------------------------
+# State Machine Configuration
+# -----------------------------------------------------------------------------
+state_machine:
+  # Initial state
+  initial_state: "idle"
+
+  # State timeouts (seconds, 0 = no timeout)
+  timeouts:
+    detecting: 0
+    navigating: 60
+    searching: 30
+    avoiding: 10
+
+# -----------------------------------------------------------------------------
+# GUI Configuration
+# -----------------------------------------------------------------------------
+gui:
+  # Window settings
+  window_title: "V2N Robot Control"
+  window_width: 1280
+  window_height: 720
+  fullscreen: false
+
+  # Display settings
+  show_lidar_overlay: true
+  show_detection_boxes: true
+  show_distance_labels: true
+  show_status_bar: true
+
+  # Colors (RGB)
+  colors:
+    detection_box: [0, 255, 0]
+    obstacle_warning: [255, 165, 0]
+    obstacle_danger: [255, 0, 0]
+    robot_position: [0, 0, 255]
+
+# -----------------------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------------------
+logging:
+  # Log level: "DEBUG" | "INFO" | "WARNING" | "ERROR"
+  level: "INFO"
+
+  # Log to file
+  file_enabled: true
+  file_path: "/var/log/v2n_robot.log"
+  max_file_size: 10485760  # 10 MB
+  backup_count: 3
+
+  # Log to console
+  console_enabled: true
+
+# -----------------------------------------------------------------------------
+# ROS2 Configuration
+# -----------------------------------------------------------------------------
+ros2:
+  node_name: "v2n_robot"
+  namespace: ""
+
+  # Topic names
+  topics:
+    cmd_vel: "/cmd_vel"
+    scan: "/scan"
+    odom: "/odom"
+    map: "/map"
+    arduino_cmd: "/arduino/cmd"
+    detections: "/detections"
+
+  # QoS settings
+  qos:
+    reliability: "reliable"
+    durability: "volatile"
+    history_depth: 10

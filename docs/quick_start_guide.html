@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>V2N Robot - Quick Start Guide</title>
+    <style>
+        :root {
+            --primary: #3498db;
+            --success: #27ae60;
+            --warning: #f39c12;
+            --danger: #e74c3c;
+            --dark: #2c3e50;
+            --light: #ecf0f1;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 30px 20px;
+            line-height: 1.7;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        header h1 {
+            font-size: 2.8em;
+            font-weight: 300;
+            margin-bottom: 10px;
+        }
+
+        header h1 span {
+            font-weight: 700;
+        }
+
+        header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        /* Quick Nav */
+        .quick-nav {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 40px;
+        }
+
+        .quick-nav a {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 30px;
+            text-decoration: none;
+            font-weight: 500;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .quick-nav a:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-2px);
+        }
+
+        /* Cards */
+        .card {
+            background: white;
+            border-radius: 20px;
+            padding: 35px;
+            margin-bottom: 25px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+        }
+
+        .card h2 {
+            color: var(--dark);
+            font-size: 1.6em;
+            margin-bottom: 25px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .card h2 .num {
+            width: 45px;
+            height: 45px;
+            background: linear-gradient(135deg, var(--primary), #2980b9);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2em;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .card h3 {
+            color: var(--dark);
+            font-size: 1.15em;
+            margin: 30px 0 15px;
+            padding-left: 15px;
+            border-left: 4px solid var(--primary);
+        }
+
+        .card p {
+            color: #555;
+            margin-bottom: 15px;
+        }
+
+        /* Command Box */
+        .cmd {
+            background: #1e2127;
+            color: #abb2bf;
+            padding: 20px 25px;
+            border-radius: 12px;
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.95em;
+            margin: 20px 0;
+            overflow-x: auto;
+            position: relative;
+        }
+
+        .cmd::before {
+            content: 'Terminal';
+            position: absolute;
+            top: 8px;
+            right: 12px;
+            font-size: 0.7em;
+            color: #5c6370;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .cmd .prompt {
+            color: var(--success);
+        }
+
+        .cmd .comment {
+            color: #5c6370;
+        }
+
+        .cmd .output {
+            color: #6c7a89;
+            border-left: 3px solid #3d4148;
+            padding-left: 15px;
+            margin: 10px 0;
+        }
+
+        /* Info Boxes */
+        .info {
+            padding: 20px 25px;
+            border-radius: 12px;
+            margin: 20px 0;
+            display: flex;
+            gap: 15px;
+            align-items: flex-start;
+        }
+
+        .info-icon {
+            font-size: 1.5em;
+            flex-shrink: 0;
+        }
+
+        .info.success {
+            background: linear-gradient(135deg, #d5f5e3, #abebc6);
+            border-left: 5px solid var(--success);
+        }
+
+        .info.warning {
+            background: linear-gradient(135deg, #fef9e7, #fdebd0);
+            border-left: 5px solid var(--warning);
+        }
+
+        .info.tip {
+            background: linear-gradient(135deg, #ebf5fb, #d6eaf8);
+            border-left: 5px solid var(--primary);
+        }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 0.95em;
+        }
+
+        th {
+            background: var(--dark);
+            color: white;
+            padding: 14px 18px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        th:first-child {
+            border-radius: 10px 0 0 0;
+        }
+
+        th:last-child {
+            border-radius: 0 10px 0 0;
+        }
+
+        td {
+            padding: 14px 18px;
+            border-bottom: 1px solid #eee;
+            color: #555;
+        }
+
+        tr:hover {
+            background: #f8f9fa;
+        }
+
+        code {
+            background: #f0f0f0;
+            padding: 3px 8px;
+            border-radius: 5px;
+            font-family: 'SF Mono', 'Consolas', monospace;
+            font-size: 0.9em;
+            color: #c0392b;
+        }
+
+        /* Key Badge */
+        .key {
+            display: inline-block;
+            background: linear-gradient(180deg, #f8f8f8, #e8e8e8);
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            padding: 4px 12px;
+            font-family: monospace;
+            font-weight: bold;
+            font-size: 0.9em;
+            box-shadow: 0 2px 0 #999;
+            margin: 0 3px;
+        }
+
+        /* Grid */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .grid-item {
+            background: var(--light);
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .grid-item h4 {
+            color: var(--dark);
+            margin-bottom: 8px;
+        }
+
+        .grid-item p {
+            color: #666;
+            font-size: 0.9em;
+            margin: 0;
+        }
+
+        /* Flow */
+        .flow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 25px 0;
+        }
+
+        .flow-step {
+            background: var(--primary);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 25px;
+            font-weight: 500;
+        }
+
+        .flow-arrow {
+            color: var(--primary);
+            font-size: 1.5em;
+        }
+
+        /* Reference Card */
+        .ref-card {
+            background: var(--light);
+            border-radius: 15px;
+            padding: 25px;
+            margin-top: 30px;
+        }
+
+        .ref-card h3 {
+            margin: 0 0 20px 0;
+            padding: 0;
+            border: none;
+            color: var(--dark);
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            color: white;
+            padding: 40px 20px;
+            margin-top: 20px;
+        }
+
+        footer a {
+            color: white;
+            text-decoration: underline;
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            header h1 { font-size: 2em; }
+            .card { padding: 25px 20px; }
+            .cmd { font-size: 0.85em; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+
+        <!-- Header -->
+        <header>
+            <h1>V2N Robot <span>Quick Start</span></h1>
+            <p>Get your bowling pin navigation robot running in 5 minutes</p>
+        </header>
+
+        <!-- Quick Navigation -->
+        <nav class="quick-nav">
+            <a href="#setup">Setup</a>
+            <a href="#run">Run</a>
+            <a href="#controls">Controls</a>
+            <a href="#commands">Commands</a>
+            <a href="#examples">Examples</a>
+            <a href="#help">Help</a>
+        </nav>
+
+        <!-- Step 1: Setup -->
+        <section id="setup" class="card">
+            <h2><span class="num">1</span> First Time Setup</h2>
+
+            <p>Connect all hardware, then run <strong>one command</strong> to set everything up:</p>
+
+            <h3>Hardware Connections</h3>
+            <div class="grid">
+                <div class="grid-item">
+                    <h4>Arduino</h4>
+                    <p><code>/dev/ttyACM0</code></p>
+                </div>
+                <div class="grid-item">
+                    <h4>LiDAR</h4>
+                    <p><code>/dev/ttyUSB0</code></p>
+                </div>
+                <div class="grid-item">
+                    <h4>Camera</h4>
+                    <p><code>/dev/video0</code></p>
+                </div>
+                <div class="grid-item">
+                    <h4>Display</h4>
+                    <p>HDMI</p>
+                </div>
+            </div>
+
+            <h3>Copy Package to V2N (From Your PC)</h3>
+            <div class="cmd">
+<span class="comment"># Connect to V2N WiFi first, then run:</span>
+<span class="prompt">$</span> scp -r bowling_target_nav root@192.168.50.1:~/ros2_ws/src/
+            </div>
+
+            <h3>Run Setup Script (On V2N)</h3>
+            <div class="cmd">
+<span class="prompt">$</span> cd ~/ros2_ws/src/bowling_target_nav/scripts
+<span class="prompt">$</span> ./v2n_master_setup.sh
+            </div>
+
+            <div class="info success">
+                <span class="info-icon">&#10004;</span>
+                <div>
+                    <strong>That's it!</strong> The setup script automatically:
+                    <ul style="margin-top:10px">
+                        <li>Builds the ROS2 package</li>
+                        <li>Installs autostart service</li>
+                        <li>Starts the GUI</li>
+                    </ul>
+                    Your robot will now start automatically on every boot!
+                </div>
+            </div>
+        </section>
+
+        <!-- Step 2: Run -->
+        <section id="run" class="card">
+            <h2><span class="num">2</span> Running the Robot</h2>
+
+            <h3>Automatic Start (Default)</h3>
+            <p>After setup, the robot starts <strong>automatically</strong> when powered on:</p>
+
+            <div class="flow">
+                <span class="flow-step">Power On</span>
+                <span class="flow-arrow">&#8594;</span>
+                <span class="flow-step">~20 sec boot</span>
+                <span class="flow-arrow">&#8594;</span>
+                <span class="flow-step">GUI Ready</span>
+                <span class="flow-arrow">&#8594;</span>
+                <span class="flow-step">Press GO!</span>
+            </div>
+
+            <h3>Manual Start / Stop</h3>
+            <table>
+                <tr>
+                    <th>Command</th>
+                    <th>What It Does</th>
+                </tr>
+                <tr>
+                    <td><code>./v2n_master_setup.sh --start</code></td>
+                    <td>Start the robot GUI</td>
+                </tr>
+                <tr>
+                    <td><code>./v2n_master_setup.sh --stop</code></td>
+                    <td>Stop everything</td>
+                </tr>
+                <tr>
+                    <td><code>./v2n_master_setup.sh --status</code></td>
+                    <td>Check if running</td>
+                </tr>
+                <tr>
+                    <td><code>./v2n_master_setup.sh --build</code></td>
+                    <td>Rebuild the package</td>
+                </tr>
+            </table>
+
+            <h3>Using Systemd Service</h3>
+            <div class="cmd">
+<span class="prompt">$</span> systemctl status robot   <span class="comment"># Check status</span>
+<span class="prompt">$</span> systemctl start robot    <span class="comment"># Start robot</span>
+<span class="prompt">$</span> systemctl stop robot     <span class="comment"># Stop robot</span>
+<span class="prompt">$</span> systemctl restart robot  <span class="comment"># Restart</span>
+<span class="prompt">$</span> journalctl -u robot -f   <span class="comment"># View live logs</span>
+            </div>
+        </section>
+
+        <!-- Step 3: Controls -->
+        <section id="controls" class="card">
+            <h2><span class="num">3</span> Controls</h2>
+
+            <h3>Keyboard Shortcuts</h3>
+            <table>
+                <tr>
+                    <th>Key</th>
+                    <th>Action</th>
+                </tr>
+                <tr>
+                    <td><span class="key">G</span></td>
+                    <td><strong>GO</strong> - Start navigating to detected bowling pin</td>
+                </tr>
+                <tr>
+                    <td><span class="key">Space</span></td>
+                    <td><strong>STOP</strong> - Emergency stop (use anytime!)</td>
+                </tr>
+                <tr>
+                    <td><span class="key">Q</span> or <span class="key">ESC</span></td>
+                    <td>Quit the application</td>
+                </tr>
+            </table>
+
+            <h3>GUI Layout</h3>
+            <div class="cmd" style="text-align: center; color: #888;">
+┌──────────────────────────────────────────────┐
+│                                              │
+│   ┌─────────────────┐  ┌─────────────────┐  │
+│   │                 │  │                 │  │
+│   │    SLAM Map     │  │   Camera Feed   │  │
+│   │  (robot pos)    │  │ (YOLO detects)  │  │
+│   │                 │  │                 │  │
+│   └─────────────────┘  └─────────────────┘  │
+│                                              │
+│   [ GO Button ]  [ STOP ]   Status: Ready   │
+│                                              │
+└──────────────────────────────────────────────┘
+            </div>
+
+            <div class="info tip">
+                <span class="info-icon">&#128161;</span>
+                <div>
+                    <strong>Tip:</strong> The GO button only works when a bowling pin is detected. Look for the <strong>green bounding box</strong> in the camera feed!
+                </div>
+            </div>
+        </section>
+
+        <!-- Step 4: Commands Reference -->
+        <section id="commands" class="card">
+            <h2><span class="num">4</span> Commands Reference</h2>
+
+            <h3>Master Setup Script</h3>
+            <div class="cmd">
+<span class="prompt">$</span> ./v2n_master_setup.sh [OPTION]
+            </div>
+
+            <table>
+                <tr>
+                    <th>Option</th>
+                    <th>Description</th>
+                </tr>
+                <tr>
+                    <td><code>--start</code></td>
+                    <td>Start the GUI (stops existing first)</td>
+                </tr>
+                <tr>
+                    <td><code>--stop</code></td>
+                    <td>Stop all robot processes</td>
+                </tr>
+                <tr>
+                    <td><code>--status</code></td>
+                    <td>Show running status</td>
+                </tr>
+                <tr>
+                    <td><code>--build</code></td>
+                    <td>Build ROS2 package only</td>
+                </tr>
+                <tr>
+                    <td><code>--service</code></td>
+                    <td>Install systemd autostart</td>
+                </tr>
+                <tr>
+                    <td><code>--help</code></td>
+                    <td>Show help message</td>
+                </tr>
+            </table>
+
+            <h3>Test Runner Script</h3>
+            <div class="cmd">
+<span class="prompt">$</span> ./run_tests.sh [TEST_TYPE] [OPTIONS]
+            </div>
+
+            <table>
+                <tr>
+                    <th>Test Type</th>
+                    <th>Description</th>
+                </tr>
+                <tr>
+                    <td><code>arduino</code></td>
+                    <td>Test Arduino motor controller</td>
+                </tr>
+                <tr>
+                    <td><code>lidar</code></td>
+                    <td>Test LiDAR sensor</td>
+                </tr>
+                <tr>
+                    <td><code>camera</code></td>
+                    <td>Test camera + YOLO detection</td>
+                </tr>
+                <tr>
+                    <td><code>all</code></td>
+                    <td>Run all tests (default)</td>
+                </tr>
+                <tr>
+                    <td><code>--check</code></td>
+                    <td>Check hardware only</td>
+                </tr>
+                <tr>
+                    <td><code>--gui</code></td>
+                    <td>Open interactive test GUI</td>
+                </tr>
+            </table>
+
+            <h3>Environment Variables</h3>
+            <table>
+                <tr>
+                    <th>Variable</th>
+                    <th>Purpose</th>
+                    <th>Example</th>
+                </tr>
+                <tr>
+                    <td><code>V2N_DETECTOR_TYPE</code></td>
+                    <td>Switch AI backend</td>
+                    <td><code>drp_binary</code></td>
+                </tr>
+                <tr>
+                    <td><code>V2N_LINEAR_SPEED</code></td>
+                    <td>Forward speed</td>
+                    <td><code>0.2</code></td>
+                </tr>
+                <tr>
+                    <td><code>V2N_LOG_LEVEL</code></td>
+                    <td>Logging detail</td>
+                    <td><code>DEBUG</code></td>
+                </tr>
+            </table>
+        </section>
+
+        <!-- Step 5: Examples -->
+        <section id="examples" class="card">
+            <h2><span class="num">5</span> Examples</h2>
+
+            <h3>Example 1: Check All Hardware</h3>
+            <div class="cmd">
+<span class="prompt">$</span> ./run_tests.sh --check
+<div class="output">
+=== Hardware Status ===
+Arduino: AVAILABLE (/dev/ttyACM0)
+LiDAR:   AVAILABLE (/dev/ttyUSB0)
+Camera:  AVAILABLE (/dev/video0)
+Display: AVAILABLE
+</div>
+            </div>
+
+            <h3>Example 2: Test Arduino Only</h3>
+            <div class="cmd">
+<span class="prompt">$</span> ./run_tests.sh arduino
+<div class="output">
+test_arduino.py::test_connection PASSED
+test_arduino.py::test_sync_command PASSED
+test_arduino.py::test_motor_control PASSED
+=== 3 passed ===
+</div>
+            </div>
+
+            <h3>Example 3: Use DRP Hardware Acceleration</h3>
+            <div class="cmd">
+<span class="prompt">$</span> export V2N_DETECTOR_TYPE=drp_binary
+<span class="prompt">$</span> ./v2n_master_setup.sh --start
+<div class="output">
+[INFO] Using DRP binary detector
+[INFO] Hardware acceleration enabled
+[INFO] GUI started
+</div>
+            </div>
+
+            <h3>Example 4: View Live Logs</h3>
+            <div class="cmd">
+<span class="prompt">$</span> journalctl -u robot -f --no-pager
+<div class="output">
+[main_gui] Started
+[arduino] Connected to /dev/ttyACM0
+[lidar] Scanning at 5Hz
+[detector] Loaded bowling_yolov5.onnx
+[nav] State: DETECTING
+[nav] Target found! Distance: 1.5m
+[nav] State: NAVIGATING
+</div>
+            </div>
+
+            <h3>Example 5: Run Unit Tests (No Hardware)</h3>
+            <div class="cmd">
+<span class="prompt">$</span> pytest test/unit/ -v
+<div class="output">
+test_config.py::test_default_config PASSED
+test_state_machine.py::test_navigation PASSED
+test_detectors.py::test_mock_detector PASSED
+=== 42 passed in 2.1s ===
+</div>
+            </div>
+        </section>
+
+        <!-- Step 6: Help -->
+        <section id="help" class="card">
+            <h2><span class="num">6</span> Quick Troubleshooting</h2>
+
+            <h3>Robot Not Moving?</h3>
+            <div class="cmd">
+<span class="comment"># 1. Check Arduino</span>
+<span class="prompt">$</span> ls -la /dev/ttyACM0
+
+<span class="comment"># 2. Restart robot</span>
+<span class="prompt">$</span> ./v2n_master_setup.sh --stop
+<span class="prompt">$</span> ./v2n_master_setup.sh --start
+            </div>
+
+            <h3>No Camera Image?</h3>
+            <div class="cmd">
+<span class="comment"># Check camera device</span>
+<span class="prompt">$</span> ls -la /dev/video0
+
+<span class="comment"># Test camera</span>
+<span class="prompt">$</span> ./run_tests.sh camera
+            </div>
+
+            <h3>GUI Not Showing?</h3>
+            <div class="cmd">
+<span class="comment"># Set display</span>
+<span class="prompt">$</span> export DISPLAY=:0
+<span class="prompt">$</span> ./v2n_master_setup.sh --start
+            </div>
+
+            <div class="info warning">
+                <span class="info-icon">&#9888;</span>
+                <div>
+                    <strong>Still stuck?</strong> Run <code>./run_tests.sh --check</code> to see which hardware is detected, then check logs with <code>journalctl -u robot -f</code>
+                </div>
+            </div>
+
+            <!-- Reference Card -->
+            <div class="ref-card">
+                <h3>Quick Reference</h3>
+                <div class="grid">
+                    <div class="grid-item">
+                        <h4>V2N IP</h4>
+                        <p><code>192.168.50.1</code></p>
+                    </div>
+                    <div class="grid-item">
+                        <h4>SSH</h4>
+                        <p><code>ssh root@192.168.50.1</code></p>
+                    </div>
+                    <div class="grid-item">
+                        <h4>Package</h4>
+                        <p><code>~/ros2_ws/src/bowling_target_nav</code></p>
+                    </div>
+                    <div class="grid-item">
+                        <h4>Config</h4>
+                        <p><code>config/robot_config.yaml</code></p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer>
+            <p><a href="technical_guide.html">&#8594; Detailed Technical Guide</a></p>
+            <p style="margin-top: 15px; opacity: 0.8;">V2N Bowling Target Navigation - Quick Start Guide</p>
+        </footer>
+
+    </div>
+</body>
+</html>

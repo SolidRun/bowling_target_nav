@@ -20,6 +20,14 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
+    # Get package directory
+    pkg_dir = get_package_share_directory('bowling_target_nav')
+    urdf_file = os.path.join(pkg_dir, 'urdf', 'v2n_robot.urdf')
+
+    # Read URDF file
+    with open(urdf_file, 'r') as f:
+        robot_description = f.read()
+
     # Launch arguments
     arduino_port_arg = DeclareLaunchArgument(
         'arduino_port',
@@ -31,6 +39,24 @@ def generate_launch_description():
         'lidar_frame',
         default_value='laser',
         description='LiDAR TF frame name'
+    )
+
+    use_robot_state_pub_arg = DeclareLaunchArgument(
+        'use_robot_state_publisher',
+        default_value='true',
+        description='Publish robot URDF for TF and visualization'
+    )
+
+    # Robot state publisher (publishes URDF TF: base_link -> laser, wheels, etc.)
+    robot_state_publisher = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        name='robot_state_publisher',
+        output='screen',
+        parameters=[{
+            'robot_description': robot_description,
+            'use_sim_time': False
+        }]
     )
 
     # Use rplidar_ros package's built-in launch file for RPLidar A1
@@ -69,23 +95,12 @@ def generate_launch_description():
         }]
     )
 
-    # Static TF: base_link -> laser
-    static_tf_base_to_laser = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='static_tf_base_to_laser',
-        arguments=[
-            '0.0', '0.0', '0.15',  # x, y, z (laser 15cm above base)
-            '0.0', '0.0', '0.0', '1.0',  # quaternion (no rotation)
-            'base_link', 'laser'
-        ]
-    )
-
     return LaunchDescription([
         arduino_port_arg,
         lidar_frame_arg,
+        use_robot_state_pub_arg,
+        robot_state_publisher,
         rplidar_launch,
         arduino_node,
         odometry_node,
-        static_tf_base_to_laser,
     ])

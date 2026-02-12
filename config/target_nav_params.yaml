@@ -40,11 +40,14 @@ vision_node:
     # Detection Parameters
     # --------------------
     # target_class: Which class to track
-    # Available classes for bowling model: "Pin+Ball", "Ball", "Pins", "Sweep"
-    target_class: "Pins"
+    # Available model classes: "Bowlingpin-bowlingball", "bowling-ball", "bowling-pins", "sweep board"
+    target_class: "bowling-pins"
+
+    # Only detect these classes (pin-related only, ignores ball/sweep)
+    filter_classes: ["bowling-pins", "Bowlingpin-bowlingball"]
 
     # Minimum confidence threshold (0.0 - 1.0)
-    conf_threshold: 0.25
+    conf_threshold: 0.5
 
     # Distance Estimation (CALIBRATION REQUIRED)
     # ------------------------------------------

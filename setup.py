@@ -20,12 +20,18 @@ setup(
         # Config files
         (os.path.join('share', package_name, 'config'),
             glob('config/*.yaml') + glob('config/*.lua') + glob('config/*.rviz')),
+        # URDF files
+        (os.path.join('share', package_name, 'urdf'),
+            glob('urdf/*.urdf') + glob('urdf/*.xacro')),
+        # Map files
+        (os.path.join('share', package_name, 'maps'),
+            glob('maps/*.yaml') + glob('maps/*.pgm')),
         # Models
         (os.path.join('share', package_name, 'models'),
             glob('models/*.onnx')),
         # Scripts (shell and python)
         (os.path.join('share', package_name, 'scripts'),
-            glob('scripts/*.sh') + glob('scripts/*.py')),
+            glob('scripts/*.sh') + glob('scripts/*.py') + glob('scripts/*.service')),
     ],
     install_requires=[
         'setuptools',
@@ -38,6 +44,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'main_gui = bowling_target_nav.nodes.main_gui:main',
             'vision_node = bowling_target_nav.nodes.vision_node:main',
             'arduino_driver_node = bowling_target_nav.nodes.arduino_driver_node:main',
             'target_follower_node = bowling_target_nav.nodes.target_follower_node:main',
@@ -45,6 +52,7 @@ setup(
             'odometry_node = bowling_target_nav.nodes.odometry_node:main',
             'map_viewer_node = bowling_target_nav.nodes.map_viewer_node:main',
             'slam_camera_gui = bowling_target_nav.nodes.slam_camera_gui:main',
+            'autonomous_explorer = bowling_target_nav.nodes.autonomous_explorer:main',
         ],
     },
 )

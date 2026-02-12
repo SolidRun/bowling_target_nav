@@ -1,0 +1,187 @@
+<?xml version="1.0"?>
+<!--
+  V2N Mecanum Robot URDF Description
+  ==================================
+
+  Simple URDF for Nav2 navigation. Defines robot footprint and sensor frames.
+
+  Frame hierarchy:
+    base_footprint (on ground)
+       └── base_link (robot center)
+              └── laser (LiDAR sensor)
+
+  Physical dimensions (from firmware config.h):
+    - Wheel diameter: 80mm (radius 40mm)
+    - Wheel base (front-rear): 190mm
+    - Track width (left-right): 210mm
+    - Robot base box: ~250mm x 260mm
+    - Height: ~150mm
+-->
+<robot name="v2n_robot">
+
+  <!-- Base footprint - on the ground plane -->
+  <link name="base_footprint"/>
+
+  <!-- Base link - robot center -->
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <box size="0.25 0.26 0.15"/>
+      </geometry>
+      <origin xyz="0 0 0.075" rpy="0 0 0"/>
+      <material name="blue">
+        <color rgba="0.2 0.2 0.8 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.25 0.26 0.15"/>
+      </geometry>
+      <origin xyz="0 0 0.075" rpy="0 0 0"/>
+    </collision>
+    <inertial>
+      <mass value="5.0"/>
+      <origin xyz="0 0 0.075" rpy="0 0 0"/>
+      <inertia ixx="0.05" ixy="0.0" ixz="0.0"
+               iyy="0.05" iyz="0.0"
+               izz="0.05"/>
+    </inertial>
+  </link>
+
+  <!-- Joint: base_footprint to base_link -->
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0.04" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Laser link - RPLidar A1 -->
+  <link name="laser">
+    <visual>
+      <geometry>
+        <cylinder radius="0.035" length="0.04"/>
+      </geometry>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <material name="black">
+        <color rgba="0.1 0.1 0.1 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="0.035" length="0.04"/>
+      </geometry>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </collision>
+    <inertial>
+      <mass value="0.2"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0"
+               iyy="0.001" iyz="0.0"
+               izz="0.001"/>
+    </inertial>
+  </link>
+
+  <!-- Joint: base_link to laser -->
+  <joint name="laser_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser"/>
+    <!-- LiDAR mounted on top, 15cm above base_link center -->
+    <origin xyz="0 0 0.15" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Camera link (optional - for future use) -->
+  <link name="camera_link">
+    <visual>
+      <geometry>
+        <box size="0.03 0.08 0.03"/>
+      </geometry>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <material name="gray">
+        <color rgba="0.5 0.5 0.5 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+  <!-- Joint: base_link to camera -->
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <!-- Camera mounted on front, looking forward -->
+    <origin xyz="0.12 0 0.10" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Wheel links (visual only - for RViz) -->
+
+  <!-- Front Left Wheel -->
+  <link name="wheel_fl">
+    <visual>
+      <geometry>
+        <cylinder radius="0.04" length="0.04"/>
+      </geometry>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <material name="dark_gray">
+        <color rgba="0.3 0.3 0.3 1.0"/>
+      </material>
+    </visual>
+  </link>
+  <joint name="wheel_fl_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="wheel_fl"/>
+    <origin xyz="0.095 0.105 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Front Right Wheel -->
+  <link name="wheel_fr">
+    <visual>
+      <geometry>
+        <cylinder radius="0.04" length="0.04"/>
+      </geometry>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <material name="dark_gray">
+        <color rgba="0.3 0.3 0.3 1.0"/>
+      </material>
+    </visual>
+  </link>
+  <joint name="wheel_fr_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="wheel_fr"/>
+    <origin xyz="0.095 -0.105 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Rear Left Wheel -->
+  <link name="wheel_rl">
+    <visual>
+      <geometry>
+        <cylinder radius="0.04" length="0.04"/>
+      </geometry>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <material name="dark_gray">
+        <color rgba="0.3 0.3 0.3 1.0"/>
+      </material>
+    </visual>
+  </link>
+  <joint name="wheel_rl_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="wheel_rl"/>
+    <origin xyz="-0.095 0.105 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Rear Right Wheel -->
+  <link name="wheel_rr">
+    <visual>
+      <geometry>
+        <cylinder radius="0.04" length="0.04"/>
+      </geometry>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <material name="dark_gray">
+        <color rgba="0.3 0.3 0.3 1.0"/>
+      </material>
+    </visual>
+  </link>
+  <joint name="wheel_rr_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="wheel_rr"/>
+    <origin xyz="-0.095 -0.105 0" rpy="0 0 0"/>
+  </joint>
+
+</robot>

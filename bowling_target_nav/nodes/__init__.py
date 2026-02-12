@@ -1,13 +1,13 @@
 """
 ROS2 Nodes for Bowling Target Navigation
+
+Nodes are imported lazily since they have different dependencies.
+Use entry points (ros2 run) or import individual modules directly.
 """
 
-from .vision_node import VisionNode
-from .arduino_driver_node import ArduinoDriverNode
-from .target_follower_node import TargetFollowerNode
-
 __all__ = [
-    'VisionNode',
     'ArduinoDriverNode',
+    'OdometryNode',
+    'VisionNode',
     'TargetFollowerNode',
 ]

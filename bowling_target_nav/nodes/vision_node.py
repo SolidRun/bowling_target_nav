@@ -48,7 +48,11 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
 
-from bowling_target_nav.detectors import YoloDetector, BinDetector, BinDetectorStub
+from bowling_target_nav.detectors import (
+    YoloOnnxDetector as YoloDetector,
+    DrpBinaryDetector as BinDetector,
+    MockDetector as BinDetectorStub,
+)
 from bowling_target_nav.utils import DistanceEstimator
 
 
@@ -68,8 +72,9 @@ class VisionNode(Node):
         self.declare_parameter('model_path', '')
         self.declare_parameter('binary_path', '')
         self.declare_parameter('camera_index', 0)
-        self.declare_parameter('target_class', 'Pins')
-        self.declare_parameter('conf_threshold', 0.3)
+        self.declare_parameter('target_class', 'bowling-pins')
+        self.declare_parameter('filter_classes', ['bowling-pins', 'Bowlingpin-bowlingball'])
+        self.declare_parameter('conf_threshold', 0.5)
         self.declare_parameter('reference_box_height', 100.0)
         self.declare_parameter('reference_distance', 1.0)
         self.declare_parameter('publish_rate', 10.0)
@@ -86,6 +91,7 @@ class VisionNode(Node):
         self.binary_path = self.get_parameter('binary_path').value
         self.camera_index = self.get_parameter('camera_index').value
         self.target_class = self.get_parameter('target_class').value
+        self.filter_classes = list(self.get_parameter('filter_classes').value)
         self.conf_threshold = self.get_parameter('conf_threshold').value
         self.ref_box_height = self.get_parameter('reference_box_height').value
         self.ref_distance = self.get_parameter('reference_distance').value
@@ -100,8 +106,13 @@ class VisionNode(Node):
         # Initialize display window
         self.window_name = "Vision Node - Press 'q' to quit"
         if self.show_video:
-            cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
-            self.get_logger().info("Video display enabled")
+            try:
+                cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+                self.get_logger().info("Video display enabled")
+            except cv2.error as e:
+                self.get_logger().warn(f"Cannot open display window: {e}")
+                self.get_logger().warn("Disabling video display. Set WAYLAND_DISPLAY and XDG_RUNTIME_DIR for Wayland.")
+                self.show_video = False
 
         # Find model path if not specified
         if not self.model_path and self.detector_type == 'yolo':
@@ -137,7 +148,9 @@ class VisionNode(Node):
         self.detection_count = 0
 
         self.get_logger().info(f"Vision node started: detector={self.detector_type}, "
-                               f"target_class={self.target_class}")
+                               f"target_class={self.target_class}, "
+                               f"filter_classes={self.filter_classes}, "
+                               f"conf_threshold={self.conf_threshold}")
 
     def _find_model_path(self) -> str:
         """Find YOLO model in standard locations."""
@@ -160,30 +173,42 @@ class VisionNode(Node):
         return ''
 
     def _create_detector(self):
-        """Create detector based on configuration."""
+        """Create and initialize detector based on configuration."""
+        detector = None
+
         if self.detector_type == 'yolo':
             if not self.model_path or not os.path.exists(self.model_path):
                 self.get_logger().error(f"YOLO model not found: {self.model_path}")
                 return None
 
-            return YoloDetector(
+            detector = YoloDetector(
                 model_path=self.model_path,
-                conf_threshold=self.conf_threshold
+                confidence_threshold=self.conf_threshold,
+                target_class=self.target_class,
+                filter_classes=self.filter_classes,
             )
 
         elif self.detector_type == 'binary':
             if not self.binary_path:
                 self.get_logger().warn("No binary path specified, using stub")
-                return BinDetectorStub()
-
-            return BinDetector(
-                binary_path=self.binary_path,
-                conf_threshold=self.conf_threshold
-            )
+                detector = BinDetectorStub()
+            else:
+                detector = BinDetector(
+                    binary_path=self.binary_path,
+                    confidence_threshold=self.conf_threshold
+                )
 
         else:
             self.get_logger().error(f"Unknown detector type: {self.detector_type}")
             return None
+
+        if detector is not None:
+            if not detector.initialize():
+                self.get_logger().error(f"Failed to initialize {self.detector_type} detector")
+                return None
+            self.get_logger().info(f"Detector initialized: {detector.name}")
+
+        return detector
 
     def _release_camera_if_busy(self, device_path: str):
         """Try to release camera if held by another process."""
@@ -273,8 +298,9 @@ class VisionNode(Node):
 
         self.frame_count += 1
 
-        # Run detection
-        detections = self.detector.detect(frame)
+        # Run detection (returns DetectionResult)
+        result = self.detector.detect(frame)
+        detections = result.detections if result.success else []
 
         # Log status every 50 frames
         if self.frame_count % 50 == 0:
@@ -283,21 +309,18 @@ class VisionNode(Node):
                 f"{self.detection_count} targets found"
             )
 
-        # Draw all detections on frame
+        # All detections are already filtered to target class only
         display_frame = frame.copy() if self.show_video else None
         if self.show_video:
             for det in detections:
-                color = (0, 255, 0) if det.class_name == self.target_class else (128, 128, 128)
-                cv2.rectangle(display_frame, (det.x1, det.y1), (det.x2, det.y2), color, 2)
+                x1, y1, x2, y2 = det.bbox
+                cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 label = f"{det.class_name} {det.confidence:.2f}"
-                cv2.putText(display_frame, label, (det.x1, det.y1 - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-
-        # Filter by target class
-        target_detections = self.detector.filter_by_class(detections, self.target_class)
+                cv2.putText(display_frame, label, (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
         # Get best detection (largest = closest)
-        best = self.detector.get_largest(target_detections)
+        best = max(detections, key=lambda d: d.area, default=None)
 
         if best:
             self.detection_count += 1
@@ -314,7 +337,8 @@ class VisionNode(Node):
 
             # Draw best target with different color
             if self.show_video:
-                cv2.rectangle(display_frame, (best.x1, best.y1), (best.x2, best.y2), (0, 0, 255), 3)
+                bx1, by1, bx2, by2 = best.bbox
+                cv2.rectangle(display_frame, (bx1, by1), (bx2, by2), (0, 0, 255), 3)
                 info = f"DIST: {distance:.2f}m ANG: {math.degrees(angle):.1f}deg"
                 cv2.putText(display_frame, info, (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
@@ -327,8 +351,11 @@ class VisionNode(Node):
 
         # Show video
         if self.show_video and display_frame is not None:
-            # Add frame info
-            cv2.putText(display_frame, f"Frame: {self.frame_count} Det: {len(detections)}",
+            # Add status bar
+            status = f"[{self.target_class}] Frame:{self.frame_count} Pins:{len(detections)}"
+            if not detections:
+                status += " | No target"
+            cv2.putText(display_frame, status,
                         (10, display_frame.shape[0] - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             cv2.imshow(self.window_name, display_frame)
@@ -362,10 +389,10 @@ class VisionNode(Node):
             'class_id': detection.class_id,
             'confidence': round(detection.confidence, 3),
             'bbox': {
-                'x1': detection.x1,
-                'y1': detection.y1,
-                'x2': detection.x2,
-                'y2': detection.y2,
+                'x1': detection.bbox[0],
+                'y1': detection.bbox[1],
+                'x2': detection.bbox[2],
+                'y2': detection.bbox[3],
                 'width': detection.width,
                 'height': detection.height,
             },

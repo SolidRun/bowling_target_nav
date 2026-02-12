@@ -140,7 +140,7 @@ class ArduinoBridge:
 
         self._serial: Optional[serial.Serial] = None
         self._state = ArduinoState.DISCONNECTED
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()       # Protects writes and connection state
         self._running = False
 
         self._read_thread: Optional[threading.Thread] = None
@@ -312,102 +312,86 @@ class ArduinoBridge:
 
         return False
 
-    def send_twist(self, linear_mm: int, angular_mrad: int) -> bool:
-        """
-        Send velocity command for mecanum drive.
-        Converts to Arduino's expected format: FWD/BWD/LEFT/RIGHT/TURN commands.
-        """
-        # Arduino uses: FWD,speed,ticks / BWD,speed,ticks / etc.
-        # For continuous velocity control, we'll use a speed value
-        # and a fixed duration (ticks=0 means continuous)
-
-        speed = max(abs(linear_mm), abs(angular_mrad))
-        if speed < 10:
-            return self.send_stop()
-
-        # Clamp speed to Arduino's range (20-255)
-        speed = max(20, min(255, speed))
-
-        if abs(angular_mrad) > abs(linear_mm):
-            # Rotation is dominant
-            if angular_mrad > 0:
-                return self.send_command("TURN", speed, 0)  # 0 = continuous
-            else:
-                return self.send_command("TURN", speed, 0)  # Will handle sign in Arduino
-        else:
-            # Linear motion is dominant
-            if linear_mm > 0:
-                return self.send_command("FWD", speed, 0)
-            else:
-                return self.send_command("BWD", speed, 0)
-
     def send_velocity(self, vx: int, vy: int, wz: int) -> bool:
         """
-        Send full mecanum velocity command.
-        vx: forward/backward (mm/s)
-        vy: left/right strafe (mm/s)
-        wz: rotation (mrad/s)
+        Send VEL command for continuous mecanum velocity control.
 
-        Arduino expects: CMD,speed,ticks where ticks is encoder ticks.
-        For continuous velocity control, we send a large tick value (9999)
-        and the driver will keep re-sending as long as cmd_vel is active.
+        Uses firmware's VEL,vx,vy,wz command which handles mecanum kinematics
+        directly on the Arduino. Must be resent within 200ms (watchdog).
+
+        Args:
+            vx: forward/backward (-255..255)
+            vy: left/right strafe (-255..255)
+            wz: rotation (-255..255)
         """
-        speed = max(abs(vx), abs(vy), abs(wz))
-        if speed < 10:
+        vx = max(-255, min(255, vx))
+        vy = max(-255, min(255, vy))
+        wz = max(-255, min(255, wz))
+
+        if abs(vx) < 10 and abs(vy) < 10 and abs(wz) < 10:
             return self.send_stop()
 
-        # Map velocity (mm/s) to PWM speed (20-255)
-        # Assuming max velocity ~300 mm/s maps to PWM 255
-        speed_pwm = int(min(255, max(20, speed * 255 / 300)))
+        return self.send_command("VEL", vx, vy, wz)
 
-        # Use large tick value for continuous motion (Arduino will keep moving)
-        # The driver sends commands at 20Hz, so motion will be smooth
-        ticks = 9999  # Large value = effectively continuous
+    def send_move(self, direction: str, speed: int, ticks: int) -> bool:
+        """
+        Send timed movement command. Firmware requires speed>0 AND ticks>0.
 
-        # Determine dominant motion
-        if abs(wz) > abs(vx) and abs(wz) > abs(vy):
-            # Rotation
-            ticks_signed = ticks if wz > 0 else -ticks
-            return self.send_command("TURN", speed_pwm, ticks_signed)
-        elif abs(vy) > abs(vx):
-            # Strafe
-            if vy > 0:
-                return self.send_command("LEFT", speed_pwm, ticks)
-            else:
-                return self.send_command("RIGHT", speed_pwm, ticks)
-        else:
-            # Forward/backward
-            if vx > 0:
-                return self.send_command("FWD", speed_pwm, ticks)
-            else:
-                return self.send_command("BWD", speed_pwm, ticks)
+        Args:
+            direction: FWD, BWD, LEFT, RIGHT, DIAGFL, DIAGFR, DIAGBL, DIAGBR
+            speed: PWM speed (20-255)
+            ticks: encoder ticks to travel (must be > 0)
+        """
+        speed = max(20, min(255, speed))
+        ticks = max(1, ticks)
+        return self.send_command(direction, speed, ticks)
+
+    def send_turn(self, speed: int, ticks: int, clockwise: bool = False) -> bool:
+        """
+        Send turn command.
+
+        Args:
+            speed: PWM speed (20-255)
+            ticks: encoder ticks (positive = CCW, negative = CW)
+            clockwise: if True, negate ticks for CW rotation
+        """
+        speed = max(20, min(255, speed))
+        ticks = max(1, abs(ticks))
+        if clockwise:
+            ticks = -ticks
+        return self.send_command("TURN", speed, ticks)
 
     def send_stop(self) -> bool:
         """Send emergency stop command."""
         return self.send_command("STOP")
 
     def _read_loop(self):
-        """Background thread for reading serial responses."""
+        """Background thread for reading serial responses.
+
+        Reads without holding _lock since pyserial supports concurrent
+        read/write from different threads. This prevents the read loop
+        from blocking the 20Hz command write loop.
+        """
         while self._running:
-            if not self.is_connected:
+            if not self.is_connected or not self._serial:
                 time.sleep(0.1)
                 continue
 
             try:
-                with self._lock:
-                    if self._serial and self._serial.in_waiting:
-                        line = self._serial.readline()
-                    else:
-                        line = None
+                if self._serial.in_waiting:
+                    line = self._serial.readline()
+                else:
+                    line = None
 
                 if line:
-                    cmd, args, valid = ChecksumProtocol.decode(line)
-                    if valid:
+                    # Parse plain text response (READY, DONE, BUSY, ERROR, encoder values)
+                    text = line.decode('ascii', errors='ignore').strip()
+                    if text:
                         self.stats['rx_count'] += 1
                         if self.on_response:
-                            self.on_response(cmd, args)
-                    else:
-                        self.stats['checksum_errors'] += 1
+                            # Split into command and args for callback
+                            parts = text.split(',') if ',' in text else [text]
+                            self.on_response(parts[0], parts[1:])
                 else:
                     time.sleep(0.01)
 

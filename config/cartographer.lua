@@ -1,5 +1,5 @@
--- Simplified Cartographer Configuration for RZ/V2N
--- 2D LiDAR SLAM without odometry
+-- Cartographer Configuration for RZ/V2N
+-- 2D LiDAR SLAM with wheel odometry
 
 include "map_builder.lua"
 include "trajectory_builder.lua"
@@ -32,7 +32,7 @@ options = {
 }
 
 MAP_BUILDER.use_trajectory_builder_2d = true
-MAP_BUILDER.num_background_threads = 2
+MAP_BUILDER.num_background_threads = 1
 
 TRAJECTORY_BUILDER_2D.min_range = 0.1
 TRAJECTORY_BUILDER_2D.max_range = 8.0
