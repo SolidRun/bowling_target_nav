@@ -38,7 +38,7 @@ export WAYLAND_DISPLAY=wayland-1
 
 # Quick cleanup
 pkill -f "ros2 launch bowling" 2>/dev/null
-pkill -f "arduino_driver\|rplidar\|cartographer\|slam_camera" 2>/dev/null
+pkill -f "arduino_driver\|rplidar\|cartographer\|main_gui" 2>/dev/null
 fuser -k /dev/ttyACM0 /dev/ttyUSB0 /dev/video0 2>/dev/null
 sleep 1
 
@@ -57,7 +57,7 @@ done
 # Cleanup on exit
 cleanup() {
     pkill -f "ros2 launch bowling" 2>/dev/null
-    pkill -f "arduino_driver\|rplidar\|cartographer\|slam_camera" 2>/dev/null
+    pkill -f "arduino_driver\|rplidar\|cartographer\|main_gui" 2>/dev/null
 }
 trap cleanup EXIT
 
@@ -73,7 +73,7 @@ sleep 2
 
 # Start GUI
 echo "Starting GUI..."
-ros2 run bowling_target_nav slam_camera_gui &
+ros2 run bowling_target_nav main_gui &
 sleep 1
 
 echo ""

@@ -313,7 +313,7 @@ class ArduinoDriverNode(Node):
             KeyValue(key="port", value=self.serial_port),
             KeyValue(key="tx_count", value=str(stats['tx_count'])),
             KeyValue(key="rx_count", value=str(stats['rx_count'])),
-            KeyValue(key="checksum_errors", value=str(stats['checksum_errors'])),
+            KeyValue(key="errors", value=str(stats['errors'])),
             KeyValue(key="reconnects", value=str(stats['reconnects'])),
         ]
 

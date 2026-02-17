@@ -49,6 +49,19 @@ vision_node:
     # Minimum confidence threshold (0.0 - 1.0)
     conf_threshold: 0.5
 
+    # NMS (Non-Maximum Suppression) IoU threshold
+    # Lower = stricter dedup, higher = more overlapping boxes kept
+    nms_threshold: 0.45
+
+    # Temporal Tracking
+    # -----------------
+    # Number of consecutive missed frames before declaring target lost
+    # Helps avoid flickering when detection briefly drops out
+    consecutive_misses_to_lose: 5
+
+    # Camera retry count for frame capture failures
+    camera_retry_count: 3
+
     # Distance Estimation (CALIBRATION REQUIRED)
     # ------------------------------------------
     # To calibrate:
@@ -107,6 +120,13 @@ target_follower_node:
     # Control Tolerances
     # ------------------
     angle_tolerance: 0.1      # radians - angle error for "centered"
+
+    # LiDAR+Vision Distance Fusion
+    # -----------------------------
+    # Angular window (radians) around vision-detected angle for LiDAR lookup
+    # Wider window = more likely to get a LiDAR return, but less precise
+    # 0.15 rad ≈ 8.6 degrees
+    lidar_fusion_window: 0.15
 
     # Frame Configuration (nav2 mode)
     # --------------------------------

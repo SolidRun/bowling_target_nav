@@ -7,13 +7,18 @@ Uses the State pattern for extensibility and testability.
 """
 
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from enum import Enum, auto
-from typing import Dict, Optional, Callable, List, Any
+from typing import Dict, Optional, Callable, List, Any, Tuple
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
+
+# Velocity smoothing constants
+VELOCITY_RAMP_RATE = 2.0   # max m/s change per second (linear)
+ANGULAR_RAMP_RATE = 3.0    # max rad/s change per second (angular)
 
 
 class RobotState(Enum):
@@ -27,41 +32,49 @@ class RobotState(Enum):
     ERROR = auto()          # Error state
 
 
-@dataclass
 class StateContext:
-    """Context data shared between states."""
-    # Target information
-    target_detected: bool = False
-    target_x: float = 0.0
-    target_y: float = 0.0
-    target_distance: float = float('inf')
-    target_confidence: float = 0.0
-    last_target_time: float = 0.0
+    """Thread-safe context data shared between states.
 
-    # Obstacle information
-    obstacle_detected: bool = False
-    obstacle_distance: float = float('inf')
-    obstacle_angle: float = 0.0
+    Uses RLock for thread safety since vision callbacks and control loops
+    may update context from different threads.
+    """
 
-    # Navigation
-    current_linear_vel: float = 0.0
-    current_angular_vel: float = 0.0
+    def __init__(self):
+        self._lock = threading.RLock()
 
-    # Timing
-    state_enter_time: float = 0.0
-    last_update_time: float = 0.0
+        # Target information
+        self.target_detected: bool = False
+        self.target_x: float = 0.0
+        self.target_y: float = 0.0
+        self.target_distance: float = float('inf')
+        self.target_confidence: float = 0.0
+        self.last_target_time: float = 0.0
 
-    # Error tracking
-    error_message: str = ""
-    error_count: int = 0
+        # Obstacle information
+        self.obstacle_detected: bool = False
+        self.obstacle_distance: float = float('inf')
+        self.obstacle_angle: float = 0.0
+
+        # Navigation
+        self.current_linear_vel: float = 0.0
+        self.current_angular_vel: float = 0.0
+
+        # Timing
+        self.state_enter_time: float = 0.0
+        self.last_update_time: float = 0.0
+
+        # Error tracking
+        self.error_message: str = ""
+        self.error_count: int = 0
 
     def reset_target(self):
         """Reset target information."""
-        self.target_detected = False
-        self.target_x = 0.0
-        self.target_y = 0.0
-        self.target_distance = float('inf')
-        self.target_confidence = 0.0
+        with self._lock:
+            self.target_detected = False
+            self.target_x = 0.0
+            self.target_y = 0.0
+            self.target_distance = float('inf')
+            self.target_confidence = 0.0
 
     def time_in_state(self) -> float:
         """Get time spent in current state."""
@@ -72,6 +85,13 @@ class StateContext:
         if self.last_target_time == 0:
             return float('inf')
         return time.time() - self.last_target_time
+
+    def update(self, **kwargs) -> None:
+        """Thread-safe batch update of context fields."""
+        with self._lock:
+            for key, value in kwargs.items():
+                if hasattr(self, key) and key != '_lock':
+                    setattr(self, key, value)
 
 
 @dataclass
@@ -467,12 +487,10 @@ class RobotStateMachine:
         self._transition_to(RobotState.ERROR)
 
     def update_context(self, **kwargs) -> None:
-        """Update context with new sensor data."""
+        """Thread-safe update context with new sensor data."""
         old_target = self.context.target_detected
 
-        for key, value in kwargs.items():
-            if hasattr(self.context, key):
-                setattr(self.context, key, value)
+        self.context.update(**kwargs)
 
         # Emit events
         if not old_target and self.context.target_detected:
@@ -533,12 +551,51 @@ class RobotStateMachine:
         self._emit('on_state_change', old_state, new_state)
         logger.info(f"State transition: {old_state.name} -> {new_state.name}")
 
-    def get_velocity(self) -> tuple:
-        """Get current velocity command (linear, angular)."""
+    def get_velocity(self, smooth: bool = True) -> Tuple[float, float]:
+        """Get current velocity command with optional smoothing.
+
+        When smooth=True, applies rate-limited ramping to prevent
+        velocity discontinuities between state transitions.
+        This reduces mechanical shock and wheel slip.
+
+        Args:
+            smooth: Apply velocity ramping (default True)
+
+        Returns:
+            (linear_vel, angular_vel) in m/s and rad/s
+        """
         handler = self._handlers.get(self._current_state)
-        if handler:
-            return handler.get_velocity(self.context)
-        return (0.0, 0.0)
+        if not handler:
+            return (0.0, 0.0)
+
+        target_linear, target_angular = handler.get_velocity(self.context)
+
+        if not smooth:
+            self.context.current_linear_vel = target_linear
+            self.context.current_angular_vel = target_angular
+            return (target_linear, target_angular)
+
+        # Rate-limited velocity ramping
+        now = time.time()
+        dt = now - self.context.last_update_time if self.context.last_update_time > 0 else 0.05
+        dt = min(dt, 0.1)  # Cap dt to prevent huge jumps
+
+        max_linear_change = VELOCITY_RAMP_RATE * dt
+        max_angular_change = ANGULAR_RAMP_RATE * dt
+
+        # Ramp linear
+        linear_diff = target_linear - self.context.current_linear_vel
+        if abs(linear_diff) > max_linear_change:
+            linear_diff = max_linear_change if linear_diff > 0 else -max_linear_change
+        self.context.current_linear_vel += linear_diff
+
+        # Ramp angular
+        angular_diff = target_angular - self.context.current_angular_vel
+        if abs(angular_diff) > max_angular_change:
+            angular_diff = max_angular_change if angular_diff > 0 else -max_angular_change
+        self.context.current_angular_vel += angular_diff
+
+        return (self.context.current_linear_vel, self.context.current_angular_vel)
 
     def get_transition_history(self) -> List[StateTransition]:
         """Get state transition history."""

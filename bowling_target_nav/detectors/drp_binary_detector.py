@@ -1,21 +1,30 @@
 """
-DRP Binary Detector
-===================
+DRP-AI Pipe Detector
+====================
 
-Object detection using V2N DRP (Dynamic Reconfigurable Processor) binary application.
-Interfaces with external binary through shared memory or file I/O.
+Object detection using V2N DRP-AI hardware accelerator via a persistent
+C++ subprocess. Communicates through stdin/stdout pipes for low-latency,
+high-throughput inference.
+
+The C++ binary (yolo_detection --pipe) loads the DRP-AI model once at startup,
+then continuously reads BGR frames from stdin and writes JSON detections to stdout.
+
+Protocol:
+    Python → C++ stdin:  [uint32 width][uint32 height][BGR pixel bytes]
+    C++ stdout → Python: {"detections":[...],"inference_ms":float}\n
+    Startup:             C++ writes "READY\n" when model is loaded
 """
 
 import json
 import logging
-import mmap
 import os
+import signal
 import struct
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 from typing import List, Optional
+
 import numpy as np
 
 from .base import DetectorBase, Detection, DetectionResult
@@ -23,337 +32,248 @@ from .base import DetectorBase, Detection, DetectionResult
 logger = logging.getLogger(__name__)
 
 
+# Default paths on V2N
+DRP_BINARY_PATHS = [
+    '/opt/drp/yolo_detection',
+    '/home/root/deploy/yolo_detection',
+    '/home/root/drp/yolo_detection',
+]
+
+DRP_MODEL_PATHS = [
+    '/opt/drp/drpai_model',
+    '/home/root/deploy/drpai_model',
+    '/home/root/drp/drpai_model',
+]
+
+
+def find_drp_binary() -> Optional[str]:
+    """Find the DRP-AI detection binary on the system."""
+    for path in DRP_BINARY_PATHS:
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
+
+
+def find_drp_model() -> Optional[str]:
+    """Find the DRP-AI model directory on the system."""
+    for path in DRP_MODEL_PATHS:
+        if os.path.isdir(path):
+            # Verify it contains the model subgraph
+            for entry in os.listdir(path):
+                if entry.startswith('sub_') and entry.endswith('_CPU_DRP_TVM'):
+                    return path
+    return None
+
+
 class DrpBinaryDetector(DetectorBase):
     """
-    Detector using V2N DRP binary application.
+    Detector using V2N DRP-AI hardware accelerator via persistent subprocess.
 
-    This detector interfaces with an external binary application that performs
-    object detection using the V2N's DRP (Dynamic Reconfigurable Processor).
+    Launches the C++ yolo_detection binary in --pipe mode. The binary loads
+    the DRP-AI model once, then processes frames sent through stdin and returns
+    JSON detection results through stdout.
 
-    Communication methods:
-    1. Shared memory (fastest) - Uses /dev/shm for frame and result exchange
-    2. File-based - Uses temporary files for frame and result exchange
-    3. Stdout - Reads JSON results from binary stdout
+    This is ~10-20x faster than ONNX Runtime on CPU for the same model.
 
     Usage:
         detector = DrpBinaryDetector(
-            binary_path="/opt/drp/bowling_detector",
-            input_method="shared_memory",
-            output_method="shared_memory"
+            binary_path="/opt/drp/yolo_detection",
+            model_dir="/opt/drp/drpai_model"
         )
         detector.initialize()
-        result = detector.detect(frame)
-
-    DRP Binary Protocol:
-        Input (shared memory at input_path):
-            - Header (16 bytes): width(4), height(4), channels(4), format(4)
-            - Image data: raw BGR pixels
-
-        Output (shared memory at output_path):
-            - Header (8 bytes): num_detections(4), status(4)
-            - Per detection (28 bytes): x1(4), y1(4), x2(4), y2(4), class_id(4), confidence(4), reserved(4)
+        result = detector.detect(frame)  # Returns DetectionResult
     """
-
-    # Protocol constants
-    INPUT_HEADER_SIZE = 16
-    OUTPUT_HEADER_SIZE = 8
-    DETECTION_SIZE = 28
-    MAX_DETECTIONS = 100
 
     def __init__(
         self,
-        binary_path: str = "/opt/drp/bowling_detector",
-        input_method: str = "shared_memory",
-        input_path: str = "/dev/shm/v2n_camera_frame",
-        output_method: str = "shared_memory",
-        output_path: str = "/dev/shm/v2n_detection_result",
-        timeout: float = 1.0,
+        binary_path: Optional[str] = None,
+        model_dir: Optional[str] = None,
         confidence_threshold: float = 0.5,
-        target_class: str = "bowling_pin",
+        target_class: str = "bowling-pins",
         class_names: Optional[List[str]] = None,
+        startup_timeout: float = 30.0,
         **kwargs
     ):
-        """
-        Initialize DRP Binary detector.
-
-        Args:
-            binary_path: Path to DRP detection binary
-            input_method: How to send frames ("shared_memory" | "file")
-            input_path: Path for input frame
-            output_method: How to receive results ("shared_memory" | "file" | "stdout")
-            output_path: Path for output results
-            timeout: Execution timeout in seconds
-            confidence_threshold: Minimum detection confidence
-            target_class: Primary target class
-            class_names: List of class names
-        """
         super().__init__(
             confidence_threshold=confidence_threshold,
             target_class=target_class,
             **kwargs
         )
 
-        self.binary_path = binary_path
-        self.input_method = input_method
-        self.input_path = input_path
-        self.output_method = output_method
-        self.output_path = output_path
-        self.timeout = timeout
-        self.class_names = class_names or ["bowling_pin"]
-
-        self._input_mmap = None
-        self._output_mmap = None
-        self._input_fd = None
-        self._output_fd = None
+        self.binary_path = binary_path or find_drp_binary()
+        self.model_dir = model_dir or find_drp_model()
+        self.class_names = class_names or ["bowling-pins"]
+        self.startup_timeout = startup_timeout
+        self._proc = None
 
     @property
     def name(self) -> str:
-        return "DRP Binary Detector"
+        return "DRP-AI Pipe Detector"
 
     @property
     def supported_classes(self) -> List[str]:
         return self.class_names
 
     def _load_model(self) -> None:
-        """Verify binary exists and setup communication channels."""
-        # Verify binary exists
-        if not Path(self.binary_path).exists():
-            raise FileNotFoundError(f"DRP binary not found: {self.binary_path}")
+        """Launch C++ subprocess and wait for READY signal."""
+        if not self.binary_path:
+            raise FileNotFoundError(
+                f"DRP-AI binary not found. Searched: {DRP_BINARY_PATHS}")
 
-        # Check binary is executable
+        if not os.path.isfile(self.binary_path):
+            raise FileNotFoundError(
+                f"DRP-AI binary not found: {self.binary_path}")
+
         if not os.access(self.binary_path, os.X_OK):
-            raise PermissionError(f"DRP binary not executable: {self.binary_path}")
+            raise PermissionError(
+                f"DRP-AI binary not executable: {self.binary_path}")
 
-        # Setup shared memory if needed
-        if self.input_method == "shared_memory":
-            self._setup_input_shared_memory()
+        if not self.model_dir:
+            raise FileNotFoundError(
+                f"DRP-AI model dir not found. Searched: {DRP_MODEL_PATHS}")
 
-        if self.output_method == "shared_memory":
-            self._setup_output_shared_memory()
+        if not os.path.isdir(self.model_dir):
+            raise FileNotFoundError(
+                f"DRP-AI model dir not found: {self.model_dir}")
 
-        logger.info(f"DRP binary verified: {self.binary_path}")
-        logger.info(f"Input method: {self.input_method} -> {self.input_path}")
-        logger.info(f"Output method: {self.output_method} -> {self.output_path}")
+        # Launch the C++ binary in pipe mode
+        cmd = [self.binary_path, '--pipe', self.model_dir]
+        logger.info(f"Launching DRP-AI subprocess: {' '.join(cmd)}")
 
-    def _setup_input_shared_memory(self) -> None:
-        """Setup input shared memory region."""
-        # Calculate size for max resolution (1920x1080 BGR)
-        max_size = self.INPUT_HEADER_SIZE + (1920 * 1080 * 3)
+        # Disable any OpenCV hardware acceleration in subprocess to prevent
+        # DRP contention (the binary links OpenCV but pipe mode doesn't use it)
+        env = os.environ.copy()
+        env['OPENCV_OPENCL_DEVICE'] = ''
+        env['OPENCV_OPENCL_RUNTIME'] = ''
 
-        # Create or open shared memory
+        self._proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,  # Unbuffered
+            env=env,
+        )
+
+        # Wait for READY signal
+        start = time.time()
+        while time.time() - start < self.startup_timeout:
+            # Check if process died
+            if self._proc.poll() is not None:
+                stderr = self._proc.stderr.read().decode('utf-8', errors='replace')
+                raise RuntimeError(
+                    f"DRP-AI process exited with code {self._proc.returncode}: {stderr}")
+
+            # Try to read READY line (non-blocking via timeout)
+            try:
+                line = self._proc.stdout.readline()
+                if line:
+                    text = line.decode('utf-8', errors='replace').strip()
+                    if text == 'READY':
+                        logger.info("DRP-AI subprocess ready")
+                        return
+                    else:
+                        logger.debug(f"DRP-AI startup output: {text}")
+            except Exception:
+                pass
+
+            time.sleep(0.1)
+
+        # Timeout
+        self._kill_proc()
+        raise TimeoutError(
+            f"DRP-AI subprocess did not become ready within {self.startup_timeout}s")
+
+    def _detect_impl(self, frame: np.ndarray) -> DetectionResult:
+        """Send frame to DRP-AI subprocess, receive JSON detections."""
+        if self._proc is None or self._proc.poll() is not None:
+            return DetectionResult(
+                success=False,
+                error="DRP-AI subprocess not running"
+            )
+
         try:
-            self._input_fd = os.open(
-                self.input_path,
-                os.O_RDWR | os.O_CREAT,
-                0o666
-            )
-            os.ftruncate(self._input_fd, max_size)
-            self._input_mmap = mmap.mmap(
-                self._input_fd,
-                max_size,
-                mmap.MAP_SHARED,
-                mmap.PROT_READ | mmap.PROT_WRITE
-            )
-            logger.debug(f"Input shared memory created: {self.input_path}")
-        except Exception as e:
-            logger.error(f"Failed to create input shared memory: {e}")
-            raise
+            h, w = frame.shape[:2]
 
-    def _setup_output_shared_memory(self) -> None:
-        """Setup output shared memory region."""
-        # Calculate size for max detections
-        max_size = self.OUTPUT_HEADER_SIZE + (self.MAX_DETECTIONS * self.DETECTION_SIZE)
+            # Write frame header (8 bytes: width + height as uint32 LE)
+            header = struct.pack('<II', w, h)
+            self._proc.stdin.write(header)
 
-        try:
-            self._output_fd = os.open(
-                self.output_path,
-                os.O_RDWR | os.O_CREAT,
-                0o666
-            )
-            os.ftruncate(self._output_fd, max_size)
-            self._output_mmap = mmap.mmap(
-                self._output_fd,
-                max_size,
-                mmap.MAP_SHARED,
-                mmap.PROT_READ | mmap.PROT_WRITE
-            )
-            logger.debug(f"Output shared memory created: {self.output_path}")
-        except Exception as e:
-            logger.error(f"Failed to create output shared memory: {e}")
-            raise
+            # Write BGR pixel data
+            self._proc.stdin.write(frame.tobytes())
+            self._proc.stdin.flush()
 
-    def _cleanup(self) -> None:
-        """Cleanup shared memory and file descriptors."""
-        if self._input_mmap:
-            self._input_mmap.close()
-            self._input_mmap = None
+            # Read JSON response line
+            line = self._proc.stdout.readline()
+            if not line:
+                return DetectionResult(
+                    success=False,
+                    error="DRP-AI subprocess closed stdout"
+                )
 
-        if self._output_mmap:
-            self._output_mmap.close()
-            self._output_mmap = None
+            data = json.loads(line.decode('utf-8', errors='replace'))
 
-        if self._input_fd:
-            os.close(self._input_fd)
-            self._input_fd = None
+            # Parse detections
+            detections = []
+            for d in data.get('detections', []):
+                confidence = d.get('confidence', 0.0)
+                if confidence < self.confidence_threshold:
+                    continue
+                class_id = d.get('class_id', 0)
+                class_name = d.get('class_name', '')
+                if not class_name and class_id < len(self.class_names):
+                    class_name = self.class_names[class_id]
 
-        if self._output_fd:
-            os.close(self._output_fd)
-            self._output_fd = None
-
-    def _write_frame_shared_memory(self, frame: np.ndarray) -> None:
-        """Write frame to shared memory."""
-        h, w, c = frame.shape
-
-        # Write header
-        header = struct.pack('IIII', w, h, c, 0)  # format=0 for BGR
-        self._input_mmap.seek(0)
-        self._input_mmap.write(header)
-
-        # Write image data
-        self._input_mmap.write(frame.tobytes())
-
-    def _write_frame_file(self, frame: np.ndarray) -> None:
-        """Write frame to file."""
-        import cv2
-        cv2.imwrite(self.input_path, frame)
-
-    def _read_result_shared_memory(self) -> List[Detection]:
-        """Read detection results from shared memory."""
-        detections = []
-
-        self._output_mmap.seek(0)
-
-        # Read header
-        header = self._output_mmap.read(self.OUTPUT_HEADER_SIZE)
-        num_detections, status = struct.unpack('II', header)
-
-        if status != 0:
-            logger.warning(f"DRP binary returned status: {status}")
-            return []
-
-        # Read detections
-        for _ in range(min(num_detections, self.MAX_DETECTIONS)):
-            det_data = self._output_mmap.read(self.DETECTION_SIZE)
-            x1, y1, x2, y2, class_id, conf_int, _ = struct.unpack('IIIIIIf', det_data)
-
-            # Convert confidence from int (0-1000) to float if needed
-            confidence = conf_int / 1000.0 if conf_int > 1 else conf_int
-
-            if confidence >= self.confidence_threshold:
-                class_name = self.class_names[class_id] if class_id < len(self.class_names) else "unknown"
                 detections.append(Detection(
                     class_name=class_name,
                     class_id=class_id,
                     confidence=confidence,
-                    bbox=(x1, y1, x2, y2)
+                    bbox=(
+                        int(d.get('x1', 0)),
+                        int(d.get('y1', 0)),
+                        int(d.get('x2', 0)),
+                        int(d.get('y2', 0)),
+                    )
                 ))
-
-        return detections
-
-    def _read_result_file(self) -> List[Detection]:
-        """Read detection results from file."""
-        detections = []
-
-        try:
-            with open(self.output_path, 'r') as f:
-                data = json.load(f)
-
-            for det in data.get('detections', []):
-                confidence = det.get('confidence', 0.0)
-                if confidence >= self.confidence_threshold:
-                    class_id = det.get('class_id', 0)
-                    class_name = self.class_names[class_id] if class_id < len(self.class_names) else "unknown"
-                    detections.append(Detection(
-                        class_name=class_name,
-                        class_id=class_id,
-                        confidence=confidence,
-                        bbox=(det['x1'], det['y1'], det['x2'], det['y2'])
-                    ))
-        except Exception as e:
-            logger.error(f"Failed to read result file: {e}")
-
-        return detections
-
-    def _read_result_stdout(self, stdout: str) -> List[Detection]:
-        """Parse detection results from stdout JSON."""
-        detections = []
-
-        try:
-            data = json.loads(stdout)
-
-            for det in data.get('detections', []):
-                confidence = det.get('confidence', 0.0)
-                if confidence >= self.confidence_threshold:
-                    class_id = det.get('class_id', 0)
-                    class_name = self.class_names[class_id] if class_id < len(self.class_names) else "unknown"
-                    detections.append(Detection(
-                        class_name=class_name,
-                        class_id=class_id,
-                        confidence=confidence,
-                        bbox=(det['x1'], det['y1'], det['x2'], det['y2'])
-                    ))
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse stdout JSON: {e}")
-        except Exception as e:
-            logger.error(f"Failed to parse stdout: {e}")
-
-        return detections
-
-    def _detect_impl(self, frame: np.ndarray) -> DetectionResult:
-        """Run DRP binary detection on frame."""
-        # Write frame
-        if self.input_method == "shared_memory":
-            self._write_frame_shared_memory(frame)
-        else:
-            self._write_frame_file(frame)
-
-        # Build command
-        cmd = [self.binary_path]
-        if self.input_method == "shared_memory":
-            cmd.extend(['--input-shm', self.input_path])
-        else:
-            cmd.extend(['--input-file', self.input_path])
-
-        if self.output_method == "shared_memory":
-            cmd.extend(['--output-shm', self.output_path])
-        elif self.output_method == "file":
-            cmd.extend(['--output-file', self.output_path])
-        # stdout method doesn't need extra args
-
-        # Run binary
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=self.timeout,
-                text=True
-            )
-
-            if result.returncode != 0:
-                logger.warning(f"DRP binary returned {result.returncode}: {result.stderr}")
-
-            # Read results
-            if self.output_method == "shared_memory":
-                detections = self._read_result_shared_memory()
-            elif self.output_method == "file":
-                detections = self._read_result_file()
-            else:  # stdout
-                detections = self._read_result_stdout(result.stdout)
 
             return DetectionResult(
                 detections=detections,
+                inference_time=data.get('inference_ms', 0.0) / 1000.0,
                 success=True
             )
 
-        except subprocess.TimeoutExpired:
-            logger.error(f"DRP binary timed out after {self.timeout}s")
-            return DetectionResult(
-                success=False,
-                error="Detection timeout"
-            )
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse DRP-AI JSON: {e}")
+            return DetectionResult(success=False, error=f"JSON parse error: {e}")
+        except BrokenPipeError:
+            logger.error("DRP-AI subprocess pipe broken")
+            return DetectionResult(success=False, error="Pipe broken")
         except Exception as e:
-            logger.error(f"DRP binary execution failed: {e}")
-            return DetectionResult(
-                success=False,
-                error=str(e)
-            )
+            logger.error(f"DRP-AI detection failed: {e}")
+            return DetectionResult(success=False, error=str(e))
+
+    def _kill_proc(self):
+        """Terminate the subprocess."""
+        if self._proc is not None:
+            try:
+                self._proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                self._proc.send_signal(signal.SIGTERM)
+                self._proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait(timeout=2)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+            self._proc = None
+
+    def shutdown(self) -> None:
+        """Stop DRP-AI subprocess."""
+        logger.info("Shutting down DRP-AI subprocess")
+        self._kill_proc()
+        super().shutdown()

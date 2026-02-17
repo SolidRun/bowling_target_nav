@@ -94,6 +94,13 @@ class YoloOnnxDetector(DetectorBase):
 
         logger.info(f"Loading ONNX model from: {model_path}")
 
+        # Session options: maximize CPU throughput
+        sess_options = ort.SessionOptions()
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        sess_options.intra_op_num_threads = 4    # Use all ARM cores for ops
+        sess_options.inter_op_num_threads = 1    # Single thread for op scheduling
+        sess_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+
         # Create inference session
         providers = ['CPUExecutionProvider']
 
@@ -104,7 +111,9 @@ class YoloOnnxDetector(DetectorBase):
         elif 'OpenVINOExecutionProvider' in available_providers:
             providers.insert(0, 'OpenVINOExecutionProvider')
 
-        self._session = ort.InferenceSession(str(model_path), providers=providers)
+        self._session = ort.InferenceSession(
+            str(model_path), sess_options=sess_options, providers=providers
+        )
 
         # Get input/output info
         input_info = self._session.get_inputs()[0]
@@ -165,30 +174,25 @@ class YoloOnnxDetector(DetectorBase):
 
     def _preprocess(self, frame: np.ndarray) -> np.ndarray:
         """
-        Preprocess frame for YOLO inference.
+        Preprocess frame for YOLO inference (optimized for ARM).
 
         Args:
             frame: Input BGR image
 
         Returns:
-            Preprocessed tensor
+            Preprocessed tensor [1, 3, H, W] float32
         """
         import cv2
 
-        # Resize
-        img = cv2.resize(frame, self.input_size)
+        # Resize with INTER_LINEAR (fastest reasonable quality)
+        img = cv2.resize(frame, self.input_size, interpolation=cv2.INTER_LINEAR)
 
-        # BGR to RGB
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # BGR to RGB + normalize in one step (avoid extra copy)
+        img = img[:, :, ::-1].astype(np.float32, copy=False)
+        img *= (1.0 / 255.0)
 
-        # Normalize to 0-1
-        img = img.astype(np.float32) / 255.0
-
-        # HWC to CHW format
-        img = np.transpose(img, (2, 0, 1))
-
-        # Add batch dimension
-        img = np.expand_dims(img, axis=0)
+        # HWC to CHW, contiguous for ONNX
+        img = np.ascontiguousarray(img.transpose(2, 0, 1)[np.newaxis])
 
         return img
 
@@ -198,18 +202,17 @@ class YoloOnnxDetector(DetectorBase):
         original_size: tuple
     ) -> List[Detection]:
         """
-        Postprocess YOLO outputs (supports both YOLOv5 and YOLOv8 formats).
+        Postprocess YOLO outputs (vectorized, supports YOLOv5 and YOLOv8).
         """
-        detections = []
         output = outputs[0]
 
         # Remove batch dimension
         if len(output.shape) == 3:
-            output = output[0]  # [num_classes+4, num_candidates] or [num_candidates, num_classes+5]
+            output = output[0]
 
         # YOLOv8 format: [num_classes+4, num_candidates] -> transpose
         if self._is_yolov8:
-            output = output.T  # -> [num_candidates, num_classes+4]
+            output = output.T
 
         orig_w, orig_h = original_size
         input_w, input_h = self.input_size
@@ -217,63 +220,60 @@ class YoloOnnxDetector(DetectorBase):
         scale_y = orig_h / input_h
         num_classes = len(self.class_names)
 
-        boxes = []
-        confidences = []
-        class_ids = []
+        # Vectorized confidence computation
+        if self._is_yolov8:
+            # YOLOv8: [cx, cy, w, h, class_score_0, ...]
+            class_scores = output[:, 4:4 + num_classes]
+            class_ids = np.argmax(class_scores, axis=1)
+            confidences = class_scores[np.arange(len(class_ids)), class_ids]
+        else:
+            # YOLOv5: [cx, cy, w, h, obj_conf, class_score_0, ...]
+            obj_conf = output[:, 4]
+            class_scores = output[:, 5:5 + num_classes]
+            class_ids = np.argmax(class_scores, axis=1)
+            confidences = obj_conf * class_scores[np.arange(len(class_ids)), class_ids]
 
-        # Build set of allowed class IDs for fast filtering
-        allowed_ids = None
+        # Filter by confidence
+        mask = confidences >= self.confidence_threshold
+
+        # Filter by allowed classes
         if self.filter_classes:
             allowed_ids = set()
             for i, name in enumerate(self.class_names):
                 if name in self.filter_classes:
                     allowed_ids.add(i)
+            class_mask = np.isin(class_ids, list(allowed_ids))
+            mask &= class_mask
 
-        for row in output:
-            if self._is_yolov8:
-                # YOLOv8: [cx, cy, w, h, class_score_0, class_score_1, ...]
-                class_scores = row[4:4 + num_classes]
-                class_id = np.argmax(class_scores)
-                confidence = float(class_scores[class_id])
-            else:
-                # YOLOv5: [cx, cy, w, h, obj_conf, class_score_0, ...]
-                obj_conf = row[4]
-                class_scores = row[5:5 + num_classes]
-                class_id = np.argmax(class_scores)
-                confidence = float(obj_conf * class_scores[class_id])
+        if not np.any(mask):
+            return []
 
-            if confidence < self.confidence_threshold:
-                continue
+        output = output[mask]
+        confidences = confidences[mask]
+        class_ids = class_ids[mask]
 
-            # Skip classes not in filter list
-            if allowed_ids is not None and int(class_id) not in allowed_ids:
-                continue
+        # Vectorized box conversion
+        cx, cy, w, h = output[:, 0], output[:, 1], output[:, 2], output[:, 3]
+        x1 = np.clip(((cx - w / 2) * scale_x).astype(int), 0, orig_w - 1)
+        y1 = np.clip(((cy - h / 2) * scale_y).astype(int), 0, orig_h - 1)
+        x2 = np.clip(((cx + w / 2) * scale_x).astype(int), 0, orig_w - 1)
+        y2 = np.clip(((cy + h / 2) * scale_y).astype(int), 0, orig_h - 1)
 
-            cx, cy, w, h = row[:4]
-            x1 = int((cx - w / 2) * scale_x)
-            y1 = int((cy - h / 2) * scale_y)
-            x2 = int((cx + w / 2) * scale_x)
-            y2 = int((cy + h / 2) * scale_y)
+        boxes = np.stack([x1, y1, x2, y2], axis=1).tolist()
+        confidences = confidences.tolist()
+        class_ids = class_ids.tolist()
 
-            x1 = max(0, min(x1, orig_w - 1))
-            y1 = max(0, min(y1, orig_h - 1))
-            x2 = max(0, min(x2, orig_w - 1))
-            y2 = max(0, min(y2, orig_h - 1))
-
-            boxes.append([x1, y1, x2, y2])
-            confidences.append(confidence)
-            class_ids.append(int(class_id))
-
-        if boxes:
-            indices = self._nms(boxes, confidences)
-            for i in indices:
-                class_name = self.class_names[class_ids[i]] if class_ids[i] < len(self.class_names) else "unknown"
-                detections.append(Detection(
-                    class_name=class_name,
-                    class_id=class_ids[i],
-                    confidence=confidences[i],
-                    bbox=tuple(boxes[i])
-                ))
+        # NMS
+        indices = self._nms(boxes, confidences)
+        detections = []
+        for i in indices:
+            class_name = self.class_names[class_ids[i]] if class_ids[i] < len(self.class_names) else "unknown"
+            detections.append(Detection(
+                class_name=class_name,
+                class_id=class_ids[i],
+                confidence=confidences[i],
+                bbox=tuple(boxes[i])
+            ))
 
         return detections
 

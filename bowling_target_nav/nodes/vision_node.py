@@ -82,6 +82,9 @@ class VisionNode(Node):
         self.declare_parameter('frame_height', 480)
         self.declare_parameter('horizontal_fov', 60.0)
         self.declare_parameter('base_frame', 'base_link')
+        self.declare_parameter('nms_threshold', 0.45)
+        self.declare_parameter('consecutive_misses_to_lose', 5)
+        self.declare_parameter('camera_retry_count', 3)
         self.declare_parameter('enable_visualization', True)
         self.declare_parameter('show_video', True)
 
@@ -93,6 +96,9 @@ class VisionNode(Node):
         self.target_class = self.get_parameter('target_class').value
         self.filter_classes = list(self.get_parameter('filter_classes').value)
         self.conf_threshold = self.get_parameter('conf_threshold').value
+        self.nms_threshold = self.get_parameter('nms_threshold').value
+        self.consecutive_misses_to_lose = self.get_parameter('consecutive_misses_to_lose').value
+        self.camera_retry_count = self.get_parameter('camera_retry_count').value
         self.ref_box_height = self.get_parameter('reference_box_height').value
         self.ref_distance = self.get_parameter('reference_distance').value
         self.publish_rate = self.get_parameter('publish_rate').value
@@ -147,10 +153,18 @@ class VisionNode(Node):
         self.frame_count = 0
         self.detection_count = 0
 
+        # Temporal tracking state
+        self._consecutive_misses = 0
+        self._last_detection = None        # Last valid Detection object
+        self._last_distance = float('inf')
+        self._last_angle = 0.0
+        self._tracking_active = False
+
         self.get_logger().info(f"Vision node started: detector={self.detector_type}, "
                                f"target_class={self.target_class}, "
                                f"filter_classes={self.filter_classes}, "
-                               f"conf_threshold={self.conf_threshold}")
+                               f"conf={self.conf_threshold}, nms={self.nms_threshold}, "
+                               f"miss_tolerance={self.consecutive_misses_to_lose}")
 
     def _find_model_path(self) -> str:
         """Find YOLO model in standard locations."""
@@ -184,6 +198,7 @@ class VisionNode(Node):
             detector = YoloDetector(
                 model_path=self.model_path,
                 confidence_threshold=self.conf_threshold,
+                nms_threshold=self.nms_threshold,
                 target_class=self.target_class,
                 filter_classes=self.filter_classes,
             )
@@ -290,26 +305,33 @@ class VisionNode(Node):
         if self.cap is None or self.detector is None:
             return
 
-        # Capture frame
-        ret, frame = self.cap.read()
-        if not ret:
-            self.get_logger().warn("Failed to read frame from camera")
+        # Capture frame with retry (USB cameras drop frames occasionally)
+        frame = None
+        for attempt in range(self.camera_retry_count):
+            ret, frame = self.cap.read()
+            if ret and frame is not None:
+                break
+            if attempt < self.camera_retry_count - 1:
+                time.sleep(0.01)
+
+        if frame is None:
+            self.get_logger().warn("Failed to read frame after retries", throttle_duration_sec=5.0)
             return
 
         self.frame_count += 1
 
-        # Run detection (returns DetectionResult)
+        # Run detection
         result = self.detector.detect(frame)
         detections = result.detections if result.success else []
 
-        # Log status every 50 frames
-        if self.frame_count % 50 == 0:
+        # Log status every 100 frames
+        if self.frame_count % 100 == 0:
             self.get_logger().info(
                 f"Frame {self.frame_count}: {len(detections)} detections, "
-                f"{self.detection_count} targets found"
+                f"{self.detection_count} targets, tracking={self._tracking_active}"
             )
 
-        # All detections are already filtered to target class only
+        # Drawing
         display_frame = frame.copy() if self.show_video else None
         if self.show_video:
             for det in detections:
@@ -323,19 +345,20 @@ class VisionNode(Node):
         best = max(detections, key=lambda d: d.area, default=None)
 
         if best:
+            # Target found - reset miss counter, update tracking
+            self._consecutive_misses = 0
+            self._tracking_active = True
+            self._last_detection = best
             self.detection_count += 1
 
-            # Estimate position
             x, y = self.estimator.estimate_position(best)
             distance, angle = self.estimator.estimate(best)
+            self._last_distance = distance
+            self._last_angle = angle
 
-            # Publish pose
             self._publish_pose(x, y, angle)
-
-            # Publish detection info
             self._publish_detection(best, distance, angle)
 
-            # Draw best target with different color
             if self.show_video:
                 bx1, by1, bx2, by2 = best.bbox
                 cv2.rectangle(display_frame, (bx1, by1), (bx2, by2), (0, 0, 255), 3)
@@ -343,18 +366,39 @@ class VisionNode(Node):
                 cv2.putText(display_frame, info, (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
-            # Log detection at INFO level
-            self.get_logger().info(
-                f"TARGET: {best.class_name} conf={best.confidence:.2f} "
-                f"dist={distance:.2f}m angle={math.degrees(angle):.1f}deg"
+            self.get_logger().debug(
+                f"TARGET: conf={best.confidence:.2f} dist={distance:.2f}m "
+                f"angle={math.degrees(angle):.1f}deg"
             )
+
+        else:
+            # No detection this frame - temporal tracking
+            self._consecutive_misses += 1
+
+            if self._tracking_active and self._consecutive_misses < self.consecutive_misses_to_lose:
+                # Still within tolerance: publish last known position
+                # This prevents flickering when detection drops a single frame
+                if self._last_detection is not None:
+                    self._publish_pose(
+                        self._last_distance * math.cos(self._last_angle),
+                        -self._last_distance * math.sin(self._last_angle),
+                        self._last_angle
+                    )
+            elif self._tracking_active:
+                # Exceeded miss tolerance: target truly lost
+                self._tracking_active = False
+                self._last_detection = None
+                self.get_logger().info(
+                    f"Target lost after {self._consecutive_misses} consecutive misses"
+                )
 
         # Show video
         if self.show_video and display_frame is not None:
-            # Add status bar
-            status = f"[{self.target_class}] Frame:{self.frame_count} Pins:{len(detections)}"
-            if not detections:
-                status += " | No target"
+            status = f"[{self.target_class}] F:{self.frame_count} D:{len(detections)}"
+            if self._tracking_active:
+                status += f" | TRACKING (miss:{self._consecutive_misses})"
+            else:
+                status += " | NO TARGET"
             cv2.putText(display_frame, status,
                         (10, display_frame.shape[0] - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)

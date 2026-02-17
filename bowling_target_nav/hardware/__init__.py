@@ -10,7 +10,17 @@ Provides hardware abstractions with pluggable implementations:
 Uses Adapter and Factory patterns for hardware abstraction.
 """
 
-from .arduino import ArduinoBase, ArduinoBridge, MockArduino, create_arduino
+from .arduino import (
+    ArduinoBase,
+    ArduinoBridge,
+    MockArduino,
+    EncoderData,
+    create_arduino,
+    WHEEL_RADIUS_M,
+    WHEELBASE_M,
+    TRACK_WIDTH_M,
+    ENCODER_CPR,
+)
 from .arduino_bridge import (
     ArduinoBridge as ArduinoBridgeDriver,
     ArduinoConfig,
@@ -27,7 +37,12 @@ __all__ = [
     'ArduinoConfig',
     'ArduinoState',
     'MockArduino',
+    'EncoderData',
     'create_arduino',
+    'WHEEL_RADIUS_M',
+    'WHEELBASE_M',
+    'TRACK_WIDTH_M',
+    'ENCODER_CPR',
 
     # Camera
     'CameraBase',

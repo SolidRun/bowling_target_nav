@@ -47,6 +47,12 @@ def generate_launch_description():
         description='Publish robot URDF for TF and visualization'
     )
 
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation clock (for rosbag replay or Gazebo)'
+    )
+
     # Robot state publisher (publishes URDF TF: base_link -> laser, wheels, etc.)
     robot_state_publisher = Node(
         package='robot_state_publisher',
@@ -55,7 +61,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'robot_description': robot_description,
-            'use_sim_time': False
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
         }]
     )
 
@@ -79,6 +85,7 @@ def generate_launch_description():
         parameters=[{
             'serial_port': LaunchConfiguration('arduino_port'),
             'baudrate': 115200,
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
         }]
     )
 
@@ -92,6 +99,7 @@ def generate_launch_description():
             'odom_frame': 'odom',
             'base_frame': 'base_link',
             'publish_tf': True,
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
         }]
     )
 
@@ -99,6 +107,7 @@ def generate_launch_description():
         arduino_port_arg,
         lidar_frame_arg,
         use_robot_state_pub_arg,
+        use_sim_time_arg,
         robot_state_publisher,
         rplidar_launch,
         arduino_node,

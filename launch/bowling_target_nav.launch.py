@@ -56,7 +56,7 @@ def generate_launch_description():
 
     # Default model path
     default_model = PathJoinSubstitution([
-        pkg_share, 'models', 'bowling_yolov5.onnx'
+        pkg_share, 'models', 'bowling_yolov8m.onnx'
     ])
 
     return LaunchDescription([
@@ -167,12 +167,10 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration('enable_arduino')),
             parameters=[{
                 'serial_port': LaunchConfiguration('serial_port'),
-                'linear_scale': 1000.0,   # m/s -> mm/s
-                'angular_scale': 1000.0,  # rad/s -> mrad/s
-                'max_linear_vel': 200.0,  # mm/s
-                'max_angular_vel': 200.0, # mrad/s
-                'command_rate': 20.0,     # Hz
-                'command_timeout': 0.5,   # seconds
+                'max_linear_speed': 0.436,   # m/s at PWM 255
+                'max_angular_speed': 2.18,   # rad/s at PWM 255
+                'command_rate': 20.0,        # Hz (must be ≥5 for 200ms watchdog)
+                'command_timeout': 0.5,      # seconds
                 'enable_diagnostics': True,
             }],
         ),
