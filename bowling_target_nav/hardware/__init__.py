@@ -8,6 +8,12 @@ Provides hardware abstractions with pluggable implementations:
 - LiDAR sensor (real and mock)
 
 Uses Adapter and Factory patterns for hardware abstraction.
+
+Two Arduino modules coexist for different use cases:
+    arduino.py        Kinematics-aware bridge (ArduinoBridge, MockArduino)
+                      Used by: odometry_node, tests
+    arduino_bridge.py Production serial driver (ArduinoBridge as ArduinoBridgeDriver)
+                      Used by: arduino_driver_node
 """
 
 from .arduino import (
@@ -30,12 +36,9 @@ from .camera import CameraBase, CameraCapture, MockCamera, create_camera
 from .lidar import LidarBase, LidarBridge, MockLidar, create_lidar
 
 __all__ = [
-    # Arduino
+    # Arduino (kinematics-aware, arduino.py)
     'ArduinoBase',
     'ArduinoBridge',
-    'ArduinoBridgeDriver',
-    'ArduinoConfig',
-    'ArduinoState',
     'MockArduino',
     'EncoderData',
     'create_arduino',
@@ -43,6 +46,11 @@ __all__ = [
     'WHEELBASE_M',
     'TRACK_WIDTH_M',
     'ENCODER_CPR',
+
+    # Arduino (production serial driver, arduino_bridge.py)
+    'ArduinoBridgeDriver',
+    'ArduinoConfig',
+    'ArduinoState',
 
     # Camera
     'CameraBase',

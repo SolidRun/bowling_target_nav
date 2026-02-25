@@ -208,6 +208,7 @@
             overflow-x: auto;
             margin: 25px 0;
             position: relative;
+            white-space: pre;
         }
 
         .diagram::before {
@@ -244,6 +245,7 @@
             overflow-x: auto;
             margin: 20px 0;
             position: relative;
+            white-space: pre;
         }
 
         .code::before {
@@ -607,9 +609,7 @@
 │            │  (Brain)       │                                               │
 │            └────────────────┘                                               │
 │                                                                              │
-│   States: IDLE → DETECTING → NAVIGATING → (repeat)                          │
-│                     ↓              ↓                                         │
-│                 SEARCHING      AVOIDING                                      │
+│   States: IDLE ──► SEARCHING ──► NAVIGATING ──► BLIND_APPROACH ──► ARRIVED  │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
             </div>
@@ -629,8 +629,8 @@
             <div class="steps">
                 <div class="step">
                     <div class="step-num">1</div>
-                    <div class="step-title">Detect</div>
-                    <div class="step-desc">Camera looks for pins</div>
+                    <div class="step-title">Search</div>
+                    <div class="step-desc">Rotate to find pins (SEARCHING)</div>
                 </div>
                 <div class="step">
                     <div class="step-num">2</div>
@@ -639,18 +639,18 @@
                 </div>
                 <div class="step">
                     <div class="step-num">3</div>
-                    <div class="step-title">Check</div>
-                    <div class="step-desc">LiDAR checks for obstacles</div>
+                    <div class="step-title">Navigate</div>
+                    <div class="step-desc">Drive toward target (NAVIGATING)</div>
                 </div>
                 <div class="step">
                     <div class="step-num">4</div>
-                    <div class="step-title">Move</div>
-                    <div class="step-desc">Drive toward target</div>
+                    <div class="step-title">Approach</div>
+                    <div class="step-desc">Blind approach if lost close (BLIND_APPROACH)</div>
                 </div>
                 <div class="step">
                     <div class="step-num">5</div>
-                    <div class="step-title">Repeat</div>
-                    <div class="step-desc">Until reached or stopped</div>
+                    <div class="step-title">Arrive</div>
+                    <div class="step-desc">Target reached (ARRIVED)</div>
                 </div>
             </div>
 
@@ -679,14 +679,14 @@ Camera Frame (640x480 BGR)
                   ▼
 ┌─────────────────────────────────────┐
 │      POSTPROCESSING                  │
-│  • Filter by confidence (>50%)       │
+│  • Filter by confidence (>35% configurable) │
 │  • Apply NMS (remove duplicates)     │
 │  • Calculate center position         │
 └─────────────────┬───────────────────┘
                   │
                   ▼
         Detection Result:
-        • Class: "bowling_pin"
+        • Class: "bowling-pins"
         • Confidence: 0.95
         • Position: (320, 240)
         • Distance: ~1.5 meters
@@ -698,13 +698,13 @@ Camera Frame (640x480 BGR)
 
             <div class="box box-green">
                 <h4>The Formula</h4>
-                <p><code>distance = (real_height × focal_length) / pixel_height</code></p>
+                <p><code>distance = reference_distance × (reference_box_height / current_box_height)</code></p>
                 <ul>
-                    <li><strong>real_height</strong> = Actual pin height (0.38 meters)</li>
-                    <li><strong>focal_length</strong> = Camera property (~500 pixels)</li>
-                    <li><strong>pixel_height</strong> = How tall the pin looks in the image</li>
+                    <li><strong>reference_box_height</strong> = Known bounding box height at reference distance (default: 100px)</li>
+                    <li><strong>reference_distance</strong> = Known distance where reference was measured (default: 1.0m)</li>
+                    <li><strong>current_box_height</strong> = How tall the pin's bounding box is in the current image</li>
                 </ul>
-                <p style="margin-top:15px"><strong>Example:</strong> If the pin appears 190 pixels tall → distance ≈ 1 meter</p>
+                <p style="margin-top:15px"><strong>Example:</strong> If reference is 100px at 1.0m, and the pin currently appears 50px tall → distance = 1.0 × (100 / 50) = 2.0 meters</p>
             </div>
 
             <h3>Movement Control</h3>
@@ -854,74 +854,58 @@ Movement combinations:
                 </div>
                 <div class="comparison-item">
                     <div style="font-size: 2.5em">&#128736;</div>
-                    <h4>Mock</h4>
+                    <h4>Mock Hardware</h4>
                     <p><span class="badge badge-yellow">Testing</span></p>
                     <ul>
-                        <li>No camera needed</li>
-                        <li>Fake detections</li>
-                        <li>For development</li>
-                        <li>Instant</li>
+                        <li>No hardware needed</li>
+                        <li>MockCamera, MockArduino, MockLidar</li>
+                        <li>Via factory: <code>create_camera(use_mock=True)</code></li>
+                        <li>For unit testing</li>
                     </ul>
                 </div>
             </div>
 
-            <h3>How to Switch Detection Backend</h3>
+            <h3>How Detection Backend Is Selected</h3>
 
-            <h4>Method 1: Configuration File (Recommended)</h4>
-            <p>Edit <code>config/robot_config.yaml</code>:</p>
+            <p>The camera thread (<code>camera_worker.py</code>) <strong>auto-detects</strong> the best available backend at startup:</p>
 
-            <div class="code" data-lang="yaml">
-<span class="comment"># Choose your detector type:</span>
-<span class="comment"># Options: "yolo_onnx", "drp_binary", "mock"</span>
+            <ol>
+                <li><strong>DRP-AI</strong> — Tries first: looks for the DRP binary at <code>/opt/drp/yolo_detection</code> and model at <code>/opt/drp/drpai_model</code></li>
+                <li><strong>YOLO ONNX</strong> — Falls back: searches for <code>.onnx</code> model files in <code>models/</code>, install, and build directories</li>
+                <li><strong>No detector</strong> — If neither is available, camera runs without detection</li>
+            </ol>
 
-detection:
-  detector_type: <span class="string">"drp_binary"</span>  <span class="comment"># ← Change this line</span>
-  confidence_threshold: <span class="number">0.5</span>
-  target_class: <span class="string">"bowling_pin"</span>
-
-  <span class="comment"># DRP-specific settings (only used when detector_type is "drp_binary")</span>
-  drp_binary:
-    binary_path: <span class="string">"/opt/drp/bowling_detector"</span>
-    input_method: <span class="string">"shared_memory"</span>
-    timeout: <span class="number">1.0</span>
+            <div class="box box-blue">
+                <h4>Auto-Detection Priority</h4>
+                <p>There is no environment variable or config switch for detector type. The code automatically tries DRP-AI first (available only on V2N hardware), then falls back to ONNX CPU. To force ONNX, simply ensure the DRP binary is not present.</p>
             </div>
 
-            <h4>Method 2: Environment Variable (Quick Override)</h4>
+            <h4>Configuration (config/robot_config.yaml)</h4>
 
-            <div class="code" data-lang="bash">
-<span class="comment"># Override detector type without editing files</span>
-<span class="keyword">export</span> V2N_DETECTOR_TYPE=drp_binary
+            <div class="code" data-lang="yaml">
+detection:
+  confidence_threshold: <span class="number">0.35</span>
+  target_class: <span class="string">"bowling-pins"</span>     <span class="comment"># Class name used by YOLO model</span>
 
-<span class="comment"># Specify custom DRP binary path</span>
-<span class="keyword">export</span> V2N_DRP_BINARY=/path/to/your/detector
+  <span class="comment"># DRP-AI binary searched at:</span>
+  <span class="comment"># /opt/drp/yolo_detection (default)</span>
 
-<span class="comment"># Or use YOLO with a different model</span>
-<span class="keyword">export</span> V2N_DETECTOR_TYPE=yolo_onnx
-<span class="keyword">export</span> V2N_YOLO_MODEL=/path/to/custom_model.onnx
-
-<span class="comment"># Now start the robot - it will use your settings</span>
-./v2n_master_setup.sh --start
+  <span class="comment"># ONNX model searched in priority order:</span>
+  <span class="comment"># bowling_yolov8m_int8.onnx, bowling_yolov8m.onnx, bowling_yolov5.onnx</span>
             </div>
 
             <h4>Method 3: In Code (For Developers)</h4>
 
             <div class="code" data-lang="python">
-<span class="keyword">from</span> bowling_target_nav.detectors <span class="keyword">import</span> create_detector
+<span class="keyword">from</span> bowling_target_nav.detectors <span class="keyword">import</span> <span class="class">YoloOnnxDetector</span>, <span class="class">DrpBinaryDetector</span>
 
-<span class="comment"># Create YOLO detector</span>
-detector = <span class="function">create_detector</span>(<span class="string">"yolo_onnx"</span>,
-    model_path=<span class="string">"models/bowling_yolov5.onnx"</span>
-)
+<span class="comment"># Create YOLO ONNX detector</span>
+detector = <span class="class">YoloOnnxDetector</span>(model_path=<span class="string">"models/bowling_yolov8m.onnx"</span>)
+detector.<span class="function">initialize</span>()
 
 <span class="comment"># Or create DRP detector</span>
-detector = <span class="function">create_detector</span>(<span class="string">"drp_binary"</span>,
-    binary_path=<span class="string">"/opt/drp/bowling_detector"</span>
-)
-
-<span class="comment"># Or create mock for testing</span>
-detector = <span class="function">create_detector</span>(<span class="string">"mock"</span>,
-    detection_mode=<span class="string">"always"</span>
-)
+detector = <span class="class">DrpBinaryDetector</span>()
+detector.<span class="function">initialize</span>()
 
 <span class="comment"># Use it (same API for all detectors!)</span>
 result = detector.<span class="function">detect</span>(camera_frame)
@@ -934,36 +918,33 @@ result = detector.<span class="function">detect</span>(camera_frame)
 
             <p>If you're developing a custom DRP detector, here's the communication protocol:</p>
 
-            <div class="diagram" data-title="Shared Memory Protocol">
-<span class="highlight">INPUT (Your program reads this):</span>
-┌────────────────────────────────────────────┐
-│ HEADER (16 bytes)                          │
-│ ├─ width      (4 bytes, uint32) = 640      │
-│ ├─ height     (4 bytes, uint32) = 480      │
-│ ├─ channels   (4 bytes, uint32) = 3        │
-│ └─ format     (4 bytes, uint32) = 0 (BGR)  │
-├────────────────────────────────────────────┤
-│ IMAGE DATA (width × height × channels)     │
-│ = 640 × 480 × 3 = 921,600 bytes            │
-│ Format: BGR, row-major order               │
-└────────────────────────────────────────────┘
-
-<span class="success">OUTPUT (Your program writes this):</span>
+            <div class="diagram" data-title="stdin/stdout Pipe Protocol">
+<span class="highlight">INPUT (Send to DRP binary via stdin pipe):</span>
 ┌────────────────────────────────────────────┐
 │ HEADER (8 bytes)                           │
-│ ├─ num_detections (4 bytes, uint32)        │
-│ └─ status         (4 bytes, uint32) = 0    │
+│ ├─ width      (4 bytes, uint32) = 640      │
+│ └─ height     (4 bytes, uint32) = 480      │
 ├────────────────────────────────────────────┤
-│ DETECTION 0 (28 bytes)                     │
-│ ├─ x1         (4 bytes, uint32)            │
-│ ├─ y1         (4 bytes, uint32)            │
-│ ├─ x2         (4 bytes, uint32)            │
-│ ├─ y2         (4 bytes, uint32)            │
-│ ├─ class_id   (4 bytes, uint32) = 0        │
-│ ├─ confidence (4 bytes, float) = 0.95      │
-│ └─ reserved   (4 bytes)                    │
-├────────────────────────────────────────────┤
-│ DETECTION 1, 2, ... N                      │
+│ IMAGE DATA (width × height × 3)            │
+│ = 640 × 480 × 3 = 921,600 bytes            │
+│ Format: BGR pixels, row-major order        │
+└────────────────────────────────────────────┘
+
+<span class="success">OUTPUT (Read from DRP binary via stdout pipe):</span>
+┌────────────────────────────────────────────┐
+│ Single JSON line per frame, e.g.:          │
+│                                            │
+│ {                                          │
+│   "detections": [                          │
+│     {                                      │
+│       "class_id": 0,                       │
+│       "confidence": 0.87,                  │
+│       "x1": 120, "y1": 80,                │
+│       "x2": 200, "y2": 350                │
+│     }                                      │
+│   ],                                       │
+│   "inference_ms": 45.2                     │
+│ }                                          │
 └────────────────────────────────────────────┘
             </div>
         </section>
@@ -982,34 +963,44 @@ result = detector.<span class="function">detect</span>(camera_frame)
                                       ▼
                               ┌───────────────┐
                               │     <span class="highlight">IDLE</span>      │  Robot is waiting
-                              │   (waiting)   │  Press GO to start
+                              │  (gray #888)  │  Press GO to start
                               └───────┬───────┘
                                       │ GO pressed
-                                      ▼
-                              ┌───────────────┐
-               Target lost    │   <span class="success">DETECTING</span>   │  Looking for pins
-            ┌────────────────►│  (scanning)   │◄─────────────────┐
-            │    > 10 sec     └───────┬───────┘                  │
-            │                         │ Pin found!               │
-            │                         ▼                          │
-            │                 ┌───────────────┐                  │
-            │                 │  <span class="warning">NAVIGATING</span>  │  Moving toward pin
-            │                 │   (moving)    │──────────────────┤
-            │                 └───────┬───────┘                  │
-            │                         │ Obstacle!                │ Obstacle cleared
-            │                         ▼                          │
-            │                 ┌───────────────┐                  │
-            │                 │   AVOIDING    │  Going around    │
-            │                 │  (dodging)    │──────────────────┘
-            │                 └───────────────┘
-            │
-            │  ┌───────────────┐
-            └─►│   SEARCHING   │  Rotating to find lost target
-               │  (spinning)   │  (gives up after 30 seconds)
-               └───────────────┘
+                          ┌───────────┴───────────┐
+                   no target visible         target visible
+                          ▼                       ▼
+                  ┌───────────────┐       ┌───────────────┐
+   timeout 30s   │  <span class="warning">SEARCHING</span>   │       │  <span class="success">NAVIGATING</span>  │
+  ┌──────────────│ (gold #e3b341)│       │(green #3fb950)│◄──────────┐
+  │              └───────┬───────┘       └──┬─────┬──────┘           │
+  │                      │ target found     │     │                  │
+  │                      └─────────►────────┘     │                  │
+  │                                               │                  │
+  │  ┌────────────────────────────────────────────┘                  │
+  │  │                                                               │
+  │  │ target lost &gt;3s       target lost &gt;3s       within           │
+  │  │ AND far (&gt;0.8m)       AND close (&lt;0.8m)    approach dist    │
+  │  │                              │                    │           │
+  │  │                              ▼                    │           │
+  │  │                    ┌───────────────┐              │           │
+  │  │   target           │ <span class="warning">BLIND_APPROACH</span>│              │           │
+  │  │   re-detected      │(orange #ffa657│──────────────┤           │
+  │  │   ┌────────────────│  dead-reckon) │              │           │
+  │  │   │                └───┬───────┬───┘              │           │
+  │  │   │                    │       │                  │           │
+  │  │   │  heading &gt;45°     │       │ reached/LiDAR   │           │
+  │  │   │  or timeout 8s    │       │ stop             │           │
+  │  │   │                    │       │                  │           │
+  │  └───┼──►─SEARCHING◄─────┘       ▼                  ▼           │
+  │      │                    ┌───────────────┐                     │
+  │      └────────────────────│   <span class="highlight">ARRIVED</span>     │                     │
+  └──────────►IDLE            │(blue #58a6ff) │  Target reached     │
+                              │  (terminal)   │                     │
+                              └───────┬───────┘                     │
+                                      │ GO pressed again            │
+                                      └─────────────────────────────┘
 
-
-        <span class="highlight">EMERGENCY STOP (Space key)</span> → Can be triggered from ANY state
+        <span class="highlight">STOP button</span> → Can be pressed from ANY state → returns to IDLE
             </div>
 
             <h3>State Details</h3>
@@ -1023,40 +1014,34 @@ result = detector.<span class="function">detect</span>(camera_frame)
                         <th>Transitions To</th>
                     </tr>
                     <tr>
-                        <td><span class="badge badge-blue">IDLE</span></td>
+                        <td><span class="badge" style="background:#eee;color:#888">IDLE</span></td>
                         <td>Robot waits for GO command</td>
                         <td>Stopped</td>
-                        <td>DETECTING (on GO)</td>
+                        <td>SEARCHING (on GO, no target visible)<br>NAVIGATING (on GO, target visible)</td>
                     </tr>
                     <tr>
-                        <td><span class="badge badge-green">DETECTING</span></td>
-                        <td>Camera scans for bowling pins</td>
-                        <td>Stopped</td>
-                        <td>NAVIGATING (pin found)<br>SEARCHING (after 10s)</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-yellow">NAVIGATING</span></td>
-                        <td>Drives toward detected pin</td>
-                        <td>Forward + turning</td>
-                        <td>AVOIDING (obstacle)<br>DETECTING (pin lost)</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-purple">SEARCHING</span></td>
-                        <td>Rotates to find lost pin</td>
+                        <td><span class="badge badge-yellow">SEARCHING</span></td>
+                        <td>Rotating in place to find bowling pins</td>
                         <td>Spinning in place</td>
-                        <td>NAVIGATING (pin found)<br>IDLE (timeout 30s)</td>
+                        <td>NAVIGATING (target found)<br>IDLE (timeout 30s)</td>
                     </tr>
                     <tr>
-                        <td><span class="badge badge-red">AVOIDING</span></td>
-                        <td>Maneuvers around obstacle</td>
-                        <td>Turn away</td>
-                        <td>DETECTING (path clear)</td>
+                        <td><span class="badge badge-green">NAVIGATING</span></td>
+                        <td>Drives toward detected pin using holonomic drive</td>
+                        <td>Forward + turning</td>
+                        <td>SEARCHING (target lost &gt;3s AND far &gt;0.8m)<br>BLIND_APPROACH (target lost &gt;3s AND close &lt;0.8m)<br>ARRIVED (within approach distance)</td>
                     </tr>
                     <tr>
-                        <td><span class="badge badge-red">STOPPED</span></td>
-                        <td>Emergency stop active</td>
+                        <td><span class="badge" style="background:#fff3e0;color:#e65100">BLIND_APPROACH</span></td>
+                        <td>Dead-reckoning toward last known pin position when camera loses sight of it</td>
+                        <td>Forward toward last known position</td>
+                        <td>ARRIVED (reached or LiDAR stop)<br>SEARCHING (heading diverge &gt;45° or timeout 8s)<br>NAVIGATING (target re-detected)</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-blue">ARRIVED</span></td>
+                        <td>Reached the target. Terminal state.</td>
                         <td>Stopped</td>
-                        <td>IDLE (manual reset)</td>
+                        <td>IDLE (STOP pressed)<br>Restarts on GO pressed</td>
                     </tr>
                 </table>
             </div>
@@ -1076,18 +1061,25 @@ navigation:
   default_angular_speed: <span class="number">0.3</span> <span class="comment"># Normal turning speed</span>
 
   <span class="comment"># Obstacle avoidance</span>
-  obstacle_distance_threshold: <span class="number">0.4</span>  <span class="comment"># Stop if obstacle closer than this (meters)</span>
-  obstacle_slowdown_distance: <span class="number">0.8</span>  <span class="comment"># Start slowing down at this distance</span>
+  obstacle_distance_threshold: <span class="number">0.25</span>  <span class="comment"># Stop if obstacle closer than this (meters)</span>
+  obstacle_slowdown_distance: <span class="number">0.5</span>   <span class="comment"># Start slowing down at this distance</span>
 
   <span class="comment"># Target approach</span>
-  target_reached_distance: <span class="number">0.3</span>     <span class="comment"># "I'm there" when this close (meters)</span>
+  target_reached_distance: <span class="number">0.15</span>     <span class="comment"># "I'm there" when this close (meters)</span>
 
   <span class="comment"># Search behavior (when target is lost)</span>
   search:
     enabled: <span class="keyword">true</span>
-    lost_timeout: <span class="number">10.0</span>       <span class="comment"># Start searching after this many seconds</span>
+    lost_timeout: <span class="number">3.0</span>        <span class="comment"># Start searching after losing target for this many seconds</span>
     search_timeout: <span class="number">30.0</span>     <span class="comment"># Give up searching after this long</span>
-    angular_speed: <span class="number">0.25</span>      <span class="comment"># How fast to spin while searching</span>
+    angular_speed: <span class="number">0.4</span>       <span class="comment"># How fast to spin while searching (rad/s)</span>
+
+  <span class="comment"># Blind approach (when target lost but close)</span>
+  blind_approach:
+    enabled: <span class="keyword">true</span>
+    distance_threshold: <span class="number">0.8</span>  <span class="comment"># Switch to blind approach if last known distance &lt; this</span>
+    timeout: <span class="number">8.0</span>             <span class="comment"># Give up blind approach after this many seconds</span>
+    heading_tolerance: <span class="number">45.0</span>  <span class="comment"># Abort if heading diverges more than this (degrees)</span>
             </div>
         </section>
 
@@ -1118,53 +1110,43 @@ navigation:
                 </div>
             </div>
 
-            <h3>Environment Variable Overrides</h3>
+            <h3>Display Environment Variables</h3>
 
-            <p>Override any setting without editing files:</p>
+            <p>These are set automatically by <code>gui/display.py</code> at startup:</p>
 
             <div class="table-wrapper">
                 <table>
                     <tr>
                         <th>Variable</th>
                         <th>What It Does</th>
-                        <th>Example</th>
+                        <th>Default</th>
                     </tr>
                     <tr>
-                        <td><code>V2N_DETECTOR_TYPE</code></td>
-                        <td>Switch detection backend</td>
-                        <td><code>drp_binary</code></td>
+                        <td><code>GDK_BACKEND</code></td>
+                        <td>GTK display backend</td>
+                        <td><code>wayland</code></td>
                     </tr>
                     <tr>
-                        <td><code>V2N_YOLO_MODEL</code></td>
-                        <td>Use different YOLO model</td>
-                        <td><code>/path/to/model.onnx</code></td>
+                        <td><code>WAYLAND_DISPLAY</code></td>
+                        <td>Wayland socket name</td>
+                        <td><code>wayland-0</code></td>
                     </tr>
                     <tr>
-                        <td><code>V2N_DRP_BINARY</code></td>
-                        <td>Path to DRP binary</td>
-                        <td><code>/opt/drp/detector</code></td>
+                        <td><code>XDG_RUNTIME_DIR</code></td>
+                        <td>Runtime directory</td>
+                        <td><code>/run</code></td>
                     </tr>
                     <tr>
-                        <td><code>V2N_ARDUINO_PORT</code></td>
-                        <td>Arduino serial port</td>
-                        <td><code>/dev/ttyACM1</code></td>
-                    </tr>
-                    <tr>
-                        <td><code>V2N_LIDAR_PORT</code></td>
-                        <td>LiDAR serial port</td>
-                        <td><code>/dev/ttyUSB1</code></td>
-                    </tr>
-                    <tr>
-                        <td><code>V2N_LINEAR_SPEED</code></td>
-                        <td>Default forward speed</td>
-                        <td><code>0.2</code></td>
-                    </tr>
-                    <tr>
-                        <td><code>V2N_LOG_LEVEL</code></td>
-                        <td>Logging verbosity</td>
-                        <td><code>DEBUG</code></td>
+                        <td><code>OPENCV_OPENCL_DEVICE</code></td>
+                        <td>Prevent DRP-AI conflicts</td>
+                        <td><code>disabled</code></td>
                     </tr>
                 </table>
+            </div>
+
+            <div class="box box-yellow">
+                <h4>Note on Configuration</h4>
+                <p>Navigation parameters, detection thresholds, and obstacle settings are configured through the <strong>Settings GUI</strong> (5 tabs) at runtime. Hardware ports are set in <code>config/robot_config.yaml</code>. The detector backend is auto-detected (DRP-AI first, then ONNX fallback).</p>
             </div>
         </section>
 
@@ -1192,20 +1174,18 @@ test_hardware.py::TestMockArduino::test_connect <span class="success">PASSED</sp
 
             <div class="code" data-lang="python">
 <span class="keyword">from</span> bowling_target_nav.hardware <span class="keyword">import</span> create_arduino, create_camera, create_lidar
-<span class="keyword">from</span> bowling_target_nav.detectors <span class="keyword">import</span> create_detector
+<span class="keyword">from</span> bowling_target_nav.detectors <span class="keyword">import</span> <span class="class">YoloOnnxDetector</span>, <span class="class">DrpBinaryDetector</span>
 
 <span class="comment"># Create MOCK components (no hardware needed!)</span>
 arduino = <span class="function">create_arduino</span>(use_mock=<span class="keyword">True</span>)
 camera = <span class="function">create_camera</span>(use_mock=<span class="keyword">True</span>, pattern=<span class="string">"gradient"</span>)
 lidar = <span class="function">create_lidar</span>(use_mock=<span class="keyword">True</span>)
-detector = <span class="function">create_detector</span>(<span class="string">"mock"</span>, detection_mode=<span class="string">"always"</span>)
 
 <span class="comment"># Add fake obstacles to test avoidance</span>
 lidar.<span class="function">add_obstacle</span>(angle=<span class="number">0</span>, distance=<span class="number">0.5</span>, width=<span class="number">30</span>)
 
 <span class="comment"># Test your code!</span>
 frame = camera.<span class="function">get_frame</span>()
-result = detector.<span class="function">detect</span>(frame)
 scan = lidar.<span class="function">get_scan</span>()
 arduino.<span class="function">set_velocity</span>(<span class="number">0.1</span>, <span class="number">0.0</span>)
 

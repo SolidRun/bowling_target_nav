@@ -36,12 +36,14 @@ logger = logging.getLogger(__name__)
 DRP_BINARY_PATHS = [
     '/opt/drp/yolo_detection',
     '/home/root/deploy/yolo_detection',
+    '/home/root/deploy/app_yolo_cam',
     '/home/root/drp/yolo_detection',
 ]
 
 DRP_MODEL_PATHS = [
     '/opt/drp/drpai_model',
     '/home/root/deploy/drpai_model',
+    '/home/root/deploy/model',
     '/home/root/drp/drpai_model',
 ]
 

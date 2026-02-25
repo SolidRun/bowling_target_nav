@@ -137,6 +137,7 @@
             margin: 20px 0;
             overflow-x: auto;
             position: relative;
+            white-space: pre;
         }
 
         .cmd::before {
@@ -583,27 +584,27 @@
                 </tr>
             </table>
 
-            <h3>Environment Variables</h3>
+            <h3>Display Environment Variables</h3>
             <table>
                 <tr>
                     <th>Variable</th>
                     <th>Purpose</th>
-                    <th>Example</th>
+                    <th>Default</th>
                 </tr>
                 <tr>
-                    <td><code>V2N_DETECTOR_TYPE</code></td>
-                    <td>Switch AI backend</td>
-                    <td><code>drp_binary</code></td>
+                    <td><code>GDK_BACKEND</code></td>
+                    <td>GTK display backend</td>
+                    <td><code>wayland</code></td>
                 </tr>
                 <tr>
-                    <td><code>V2N_LINEAR_SPEED</code></td>
-                    <td>Forward speed</td>
-                    <td><code>0.2</code></td>
+                    <td><code>WAYLAND_DISPLAY</code></td>
+                    <td>Wayland socket name</td>
+                    <td><code>wayland-0</code></td>
                 </tr>
                 <tr>
-                    <td><code>V2N_LOG_LEVEL</code></td>
-                    <td>Logging detail</td>
-                    <td><code>DEBUG</code></td>
+                    <td><code>XDG_RUNTIME_DIR</code></td>
+                    <td>Runtime directory</td>
+                    <td><code>/run</code></td>
                 </tr>
             </table>
         </section>
@@ -635,14 +636,14 @@ test_arduino.py::test_motor_control PASSED
 </div>
             </div>
 
-            <h3>Example 3: Use DRP Hardware Acceleration</h3>
+            <h3>Example 3: DRP Hardware Acceleration (Automatic)</h3>
             <div class="cmd">
-<span class="prompt">$</span> export V2N_DETECTOR_TYPE=drp_binary
+<span class="comment"># On V2N hardware, DRP-AI is auto-detected - just start normally:</span>
 <span class="prompt">$</span> ./v2n_master_setup.sh --start
 <div class="output">
-[INFO] Using DRP binary detector
-[INFO] Hardware acceleration enabled
-[INFO] GUI started
+[Camera Thread] Loading DRP-AI detector: /opt/drp/yolo_detection
+[Camera Thread] OCA disabled (DRP-AI conflict prevention)
+[Camera Thread] DRP-AI detector ready
 </div>
             </div>
 
@@ -654,7 +655,7 @@ test_arduino.py::test_motor_control PASSED
 [arduino] Connected to /dev/ttyACM0
 [lidar] Scanning at 5Hz
 [detector] Loaded bowling_yolov5.onnx
-[nav] State: DETECTING
+[nav] State: SEARCHING
 [nav] Target found! Distance: 1.5m
 [nav] State: NAVIGATING
 </div>
@@ -665,7 +666,7 @@ test_arduino.py::test_motor_control PASSED
 <span class="prompt">$</span> pytest test/unit/ -v
 <div class="output">
 test_config.py::test_default_config PASSED
-test_state_machine.py::test_navigation PASSED
+test_state.py::test_shared_state PASSED
 test_detectors.py::test_mock_detector PASSED
 === 42 passed in 2.1s ===
 </div>

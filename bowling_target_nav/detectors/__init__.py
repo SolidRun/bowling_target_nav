@@ -2,19 +2,14 @@
 Detectors Module
 ================
 
-Provides pluggable object detection with multiple backend support:
-- YOLO ONNX (default)
-- V2N DRP Binary application
-- Mock detector (for testing)
-
-Uses Strategy pattern for easy swapping between implementations.
+Provides object detection with multiple backend support:
+- YOLO ONNX Runtime (default, CPU fallback)
+- V2N DRP-AI Binary (hardware-accelerated on RZ/V2N)
 """
 
 from .base import DetectorBase, Detection, DetectionResult
 from .yolo_onnx_detector import YoloOnnxDetector
 from .drp_binary_detector import DrpBinaryDetector
-from .mock_detector import MockDetector
-from .factory import DetectorFactory, create_detector
 
 __all__ = [
     'DetectorBase',
@@ -22,7 +17,4 @@ __all__ = [
     'DetectionResult',
     'YoloOnnxDetector',
     'DrpBinaryDetector',
-    'MockDetector',
-    'DetectorFactory',
-    'create_detector',
 ]
