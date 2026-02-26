@@ -88,14 +88,19 @@ class MainGuiNode(Node):
         if not state.running:
             return
         try:
-            points = []
-            angle = msg.angle_min
-            for r in msg.ranges:
-                if msg.range_min < r < msg.range_max:
-                    x = r * math.cos(angle)
-                    y = r * math.sin(angle)
-                    points.append((x, y))
-                angle += msg.angle_increment
+            ranges = np.array(msg.ranges, dtype=np.float32)
+            n = len(ranges)
+            angles = np.linspace(
+                msg.angle_min,
+                msg.angle_min + (n - 1) * msg.angle_increment,
+                n, dtype=np.float32)
+            valid = (ranges > msg.range_min) & (ranges < msg.range_max)
+            r_v = ranges[valid]
+            a_v = angles[valid]
+            if len(r_v) > 0:
+                points = np.column_stack((r_v * np.cos(a_v), r_v * np.sin(a_v)))
+            else:
+                points = np.empty((0, 2), dtype=np.float32)
             state.sensors.set_laser(points)
             state.sensors.set_raw_scan(msg)
 
@@ -198,13 +203,16 @@ class MainGuiNode(Node):
 
             elif nav_state == "SEARCHING":
                 search_time = state.nav.get_search_time()
+                # Safety timeout (odometry might be broken)
                 if search_time > nav.search_timeout:
-                    self.get_logger().warn(f"Search timeout ({search_time:.1f}s)")
+                    self.get_logger().warn(f"Search safety timeout ({search_time:.1f}s)")
                     nav.stop_robot()
                     self.is_active = False
                     state.nav.set_nav_state("IDLE", None)
-                else:
-                    nav.search_rotate()
+                elif nav.search_rotate():  # Returns True when 360° complete
+                    self.get_logger().warn("360° scan complete - target not found")
+                    self.is_active = False
+                    state.nav.set_nav_state("IDLE", None)
 
             elif nav_state == "IDLE" and self.is_active:
                 self.get_logger().info("No target visible - searching...")
@@ -226,9 +234,15 @@ def ros_thread():
                 rclpy.spin_once(node, timeout_sec=0.02)
             except Exception as e:
                 if state.running:
+                    import traceback
+                    print(f"[ROS Thread] spin_once error: {e}", flush=True)
+                    traceback.print_exc()
                     state.add_error('ros_spin', str(e))
                 break
     except Exception as e:
+        import traceback
+        print(f"[ROS Thread] Fatal error: {e}", flush=True)
+        traceback.print_exc()
         state.add_error('ros_thread', str(e))
     finally:
         print("[ROS Thread] Cleaning up...", flush=True)

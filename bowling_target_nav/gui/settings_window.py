@@ -142,7 +142,7 @@ class SettingsWindow(Gtk.Window):
         s = self._nav_setter
         box.pack_start(self._make_slider("Stop Distance (m)", 0.10, 0.50, 0.01, 0.25, s('obstacle_distance')), False, False, 0)
         box.pack_start(self._make_slider("Slowdown Distance (m)", 0.20, 1.00, 0.05, 0.50, s('obstacle_slowdown_distance')), False, False, 0)
-        box.pack_start(self._make_slider("Robot Half Width (m)", 0.05, 0.30, 0.01, 0.15, s('robot_half_width')), False, False, 0)
+        box.pack_start(self._make_slider("Robot Half Width (m)", 0.05, 0.30, 0.01, 0.18, s('robot_half_width')), False, False, 0)
         return box
 
     def _build_calibration_tab(self):

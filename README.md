@@ -1,5 +1,8 @@
 # Bowling Target Navigation — RZ/V2N Robot
 
+> [!WARNING]
+> This project is under active development. APIs, configuration, and behavior may change without notice. Use at your own risk in production environments.
+
 > Autonomous bowling pin detection and navigation for the Renesas RZ/V2N mecanum robot.
 > Combines SLAM mapping, YOLO AI detection, and holonomic navigation in a single fullscreen GUI.
 
@@ -54,9 +57,9 @@ ssh root@192.168.50.1
 # Copy package (from PC)
 scp -r bowling_target_nav root@192.168.50.1:~/ros2_ws/src/
 
-# Run master setup — builds, installs service, starts GUI
+# Run setup — builds, installs services, starts GUI
 cd ~/ros2_ws/src/bowling_target_nav/scripts
-./v2n_master_setup.sh
+./v2n_setup.sh
 ```
 
 This single command:
@@ -70,20 +73,27 @@ This single command:
 After setup, the robot **starts automatically on boot**. Manual control:
 
 ```bash
-./v2n_master_setup.sh --start    # Start GUI
-./v2n_master_setup.sh --stop     # Stop everything
-./v2n_master_setup.sh --status   # Check status
-./v2n_master_setup.sh --build    # Rebuild package
+./v2n_setup.sh --start    # Start GUI
+./v2n_setup.sh --stop     # Stop everything
+./v2n_setup.sh --status   # Check status
+./v2n_setup.sh --build    # Rebuild package
 ```
 
 ### Service Commands
 
 ```bash
+# Robot hardware (LiDAR, motors, SLAM, odometry)
 systemctl status robot       # Check status
-systemctl start robot        # Start
-systemctl stop robot         # Stop
 systemctl restart robot      # Restart
 journalctl -u robot -f       # Live logs
+
+# GUI launcher (Start/Stop GUI floating button)
+systemctl status bowling-launcher
+systemctl restart bowling-launcher
+
+# Remote desktop (web-based at http://192.168.50.1:8080)
+systemctl status remote-desktop
+systemctl restart remote-desktop
 ```
 
 ---
@@ -95,14 +105,16 @@ Camera (30fps)              LiDAR (10Hz)            Wheel Encoders (20Hz)
      │                          │                         │
      ▼                          ▼                         ▼
 YOLO Detection         Cartographer SLAM           Odometry Node
-(DRP-AI or ONNX)       (2D occupancy grid)        (odom → base_link TF)
+(DRP-AI Stream/Pipe    (2D occupancy grid)        (odom → base_link TF)
+ or ONNX CPU)
      │                          │                         │
      └──────────┬───────────────┘                         │
                 ▼                                         │
         Navigation Engine (20Hz)  ◄────────────────────────┘
         ├── Vision+LiDAR fusion
         ├── Holonomic path planning
-        ├── Obstacle avoidance (strafe)
+        ├── VFH obstacle avoidance
+        ├── 360° odometry-tracked search scan
         ├── Blind approach (dead-reckoning)
         └── Multi-signal arrival detection
                 │
@@ -145,7 +157,7 @@ The GUI shows:
             ┌────────── STOP pressed ──────────────────┐
             │                                          │
             ▼         GO pressed                       │
-      ┌──► IDLE ◄──────────── Search timeout (30s)    │
+      ┌──► IDLE ◄──────────── 360° scan complete        │
       │     │                                          │
       │     │ No target visible                        │
       │     ▼                                          │
@@ -174,7 +186,8 @@ The GUI shows:
 
 | Backend | Description | Performance | Config Value |
 |---------|-------------|-------------|--------------|
-| **DRP-AI** | V2N hardware accelerator | ~5-10ms inference | `drp_binary` |
+| **DRP-AI Stream** | C++ owns camera + inference, Python reads via shared memory | ~5-10ms inference, zero-copy frames | `drp_stream` |
+| **DRP-AI Pipe** | Python sends frames to C++ subprocess via stdin/stdout | ~10-20ms inference | `drp_binary` |
 | **YOLO ONNX** | CPU inference (fallback) | ~45ms inference | `yolo_onnx` |
 | **Mock** | Testing without camera | Instant | `mock` |
 
@@ -324,7 +337,7 @@ ls -la /dev/ttyACM0 /dev/ttyUSB0 /dev/video0
 ### Robot Not Responding
 
 ```bash
-./v2n_master_setup.sh --stop && ./v2n_master_setup.sh --start
+./v2n_setup.sh --stop && ./v2n_setup.sh --start
 ```
 
 ### GUI Not Starting
@@ -338,7 +351,7 @@ echo $XDG_RUNTIME_DIR        # Should be "/run"
 ### Rebuild
 
 ```bash
-./v2n_master_setup.sh --build
+./v2n_setup.sh --build
 ```
 
 ---

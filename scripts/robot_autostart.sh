@@ -38,8 +38,9 @@ export WAYLAND_DISPLAY=wayland-1
 
 # Quick cleanup
 pkill -f "ros2 launch bowling" 2>/dev/null
-pkill -f "arduino_driver\|rplidar\|cartographer\|main_gui" 2>/dev/null
-fuser -k /dev/ttyACM0 /dev/ttyUSB0 /dev/video0 2>/dev/null
+pkill -f "arduino_driver\|rplidar\|cartographer\|main_gui\|app_yolo_cam" 2>/dev/null
+fuser -k /dev/ttyACM0 /dev/ttyUSB0 2>/dev/null
+rm -f /dev/shm/v2n_camera
 sleep 1
 
 # Hardware status
@@ -57,11 +58,11 @@ done
 # Cleanup on exit
 cleanup() {
     pkill -f "ros2 launch bowling" 2>/dev/null
-    pkill -f "arduino_driver\|rplidar\|cartographer\|main_gui" 2>/dev/null
+    pkill -f "arduino_driver\|rplidar\|cartographer" 2>/dev/null
 }
 trap cleanup EXIT
 
-# Start services
+# Start services (GUI is started separately via bowling-launcher.service)
 echo ""
 echo "Starting robot services..."
 
@@ -71,14 +72,9 @@ sleep 3
 ros2 launch bowling_target_nav mapping.launch.py &
 sleep 2
 
-# Start GUI
-echo "Starting GUI..."
-ros2 run bowling_target_nav main_gui &
-sleep 1
-
 echo ""
 echo "============================================"
-echo "  Robot Ready!"
+echo "  Robot Ready! (GUI via launcher button)"
 echo "============================================"
 echo "Topics: /cmd_vel /arduino/cmd /arduino/status /scan /odom /map"
 echo ""

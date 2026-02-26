@@ -1,29 +1,36 @@
 """
-DRP-AI Pipe Detector
-====================
+DRP-AI Detectors
+================
 
-Object detection using V2N DRP-AI hardware accelerator via a persistent
-C++ subprocess. Communicates through stdin/stdout pipes for low-latency,
-high-throughput inference.
+Object detection using V2N DRP-AI hardware accelerator via C++ subprocess.
 
-The C++ binary (yolo_detection --pipe) loads the DRP-AI model once at startup,
-then continuously reads BGR frames from stdin and writes JSON detections to stdout.
+Two modes:
+  - Pipe mode:   Python sends BGR frames via stdin, reads JSON from stdout.
+  - Stream mode: C++ owns camera, writes frames to shared memory,
+                 writes JSON detections to stdout. Much faster.
 
-Protocol:
+Protocol (pipe mode):
     Python → C++ stdin:  [uint32 width][uint32 height][BGR pixel bytes]
-    C++ stdout → Python: {"detections":[...],"inference_ms":float}\n
-    Startup:             C++ writes "READY\n" when model is loaded
+    C++ stdout → Python: {"detections":[...],"inference_ms":float}\\n
+    Startup:             C++ writes "READY\\n" when model is loaded
+
+Protocol (stream mode):
+    C++ stdout → Python: {"detections":[...],"inference_ms":float}\\n
+    C++ → /dev/shm/v2n_camera: [uint32 w][uint32 h][uint64 seq][uint64 ts][BGR data]
+    Startup:             C++ writes "READY\\n" when model is loaded
 """
 
 import json
 import logging
+import mmap
 import os
 import signal
 import struct
 import subprocess
+import threading
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -155,6 +162,7 @@ class DrpBinaryDetector(DetectorBase):
             stderr=subprocess.PIPE,
             bufsize=0,  # Unbuffered
             env=env,
+            cwd=os.path.dirname(self.binary_path),
         )
 
         # Wait for READY signal
@@ -279,3 +287,200 @@ class DrpBinaryDetector(DetectorBase):
         logger.info("Shutting down DRP-AI subprocess")
         self._kill_proc()
         super().shutdown()
+
+
+SHM_NAME = '/dev/shm/v2n_camera'
+SHM_HEADER_SIZE = 24  # uint32 w + uint32 h + uint64 seq + uint64 ts
+
+
+class DrpStreamDetector:
+    """
+    DRP-AI stream mode: C++ owns camera + inference, Python reads results.
+
+    The C++ binary runs with --stream flag:
+      - Captures camera frames internally (multi-threaded)
+      - Runs DRP-AI inference (multi-threaded)
+      - Writes camera frames to shared memory /dev/shm/v2n_camera
+      - Writes JSON detections to stdout
+
+    Python just reads:
+      - get_frame() → latest BGR frame from shared memory (zero-copy mmap)
+      - get_detections() → latest JSON detections from stdout reader thread
+
+    This eliminates ~921KB pipe transfer per frame → ~10x faster than pipe mode.
+    """
+
+    def __init__(
+        self,
+        binary_path: Optional[str] = None,
+        model_dir: Optional[str] = None,
+        confidence_threshold: float = 0.5,
+        class_names: Optional[List[str]] = None,
+        startup_timeout: float = 30.0,
+    ):
+        self.binary_path = binary_path or find_drp_binary()
+        self.model_dir = model_dir or find_drp_model()
+        self.class_names = class_names or ["bowling-pins"]
+        self.confidence_threshold = confidence_threshold
+        self.startup_timeout = startup_timeout
+        self._proc = None
+        self._shm_fd = -1
+        self._shm = None
+        self._reader_thread = None
+        self._running = False
+        self._lock = threading.Lock()
+        self._latest_detections: List[dict] = []
+        self._latest_infer_ms = 0.0
+        self._last_seq = 0
+
+    def initialize(self) -> bool:
+        """Launch C++ stream subprocess, wait for READY, open shared memory."""
+        if not self.binary_path or not os.path.isfile(self.binary_path):
+            logger.error("DRP-AI binary not found")
+            return False
+        if not self.model_dir or not os.path.isdir(self.model_dir):
+            logger.error("DRP-AI model dir not found")
+            return False
+
+        cmd = [self.binary_path, '--stream', self.model_dir]
+        logger.info(f"Launching DRP-AI stream: {' '.join(cmd)}")
+
+        self._proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+            cwd=os.path.dirname(self.binary_path),
+        )
+
+        # Wait for READY
+        start = time.time()
+        while time.time() - start < self.startup_timeout:
+            if self._proc.poll() is not None:
+                stderr = self._proc.stderr.read().decode('utf-8', errors='replace')
+                logger.error(f"Stream process died: {stderr}")
+                return False
+            try:
+                line = self._proc.stdout.readline()
+                if line:
+                    text = line.decode('utf-8', errors='replace').strip()
+                    if text == 'READY':
+                        logger.info("DRP-AI stream ready")
+                        break
+                    else:
+                        logger.debug(f"Stream startup: {text}")
+            except Exception:
+                pass
+            time.sleep(0.1)
+        else:
+            logger.error("Stream startup timeout")
+            self.shutdown()
+            return False
+
+        # Wait briefly for shared memory to be populated
+        for _ in range(20):
+            if os.path.exists(SHM_NAME):
+                break
+            time.sleep(0.1)
+
+        if not os.path.exists(SHM_NAME):
+            logger.error("Shared memory not created")
+            self.shutdown()
+            return False
+
+        # Open shared memory
+        try:
+            self._shm_fd = os.open(SHM_NAME, os.O_RDONLY)
+            shm_size = os.fstat(self._shm_fd).st_size
+            self._shm = mmap.mmap(self._shm_fd, shm_size, access=mmap.ACCESS_READ)
+            logger.info(f"Shared memory opened: {shm_size} bytes")
+        except Exception as e:
+            logger.error(f"Failed to open shared memory: {e}")
+            self.shutdown()
+            return False
+
+        # Start JSON reader thread
+        self._running = True
+        self._reader_thread = threading.Thread(
+            target=self._read_json_loop, daemon=True)
+        self._reader_thread.start()
+
+        return True
+
+    def _read_json_loop(self):
+        """Background thread: read JSON detection lines from stdout."""
+        while self._running and self._proc and self._proc.poll() is None:
+            try:
+                line = self._proc.stdout.readline()
+                if not line:
+                    break
+                data = json.loads(line.decode('utf-8', errors='replace'))
+                dets = data.get('detections', [])
+                ms = data.get('inference_ms', 0.0)
+                with self._lock:
+                    self._latest_detections = dets
+                    self._latest_infer_ms = ms
+            except json.JSONDecodeError:
+                continue
+            except Exception:
+                break
+        logger.info("JSON reader thread stopped")
+
+    def get_frame(self) -> Optional[np.ndarray]:
+        """Read latest camera frame from shared memory. Returns BGR numpy array."""
+        if self._shm is None:
+            return None
+        try:
+            self._shm.seek(0)
+            header = self._shm.read(SHM_HEADER_SIZE)
+            if len(header) < SHM_HEADER_SIZE:
+                return None
+            w, h, seq, ts = struct.unpack('<IIqq', header)
+            if w == 0 or h == 0 or seq == 0:
+                return None
+            if seq == self._last_seq:
+                return None  # No new frame
+            self._last_seq = seq
+            nbytes = w * h * 3
+            data = self._shm.read(nbytes)
+            if len(data) < nbytes:
+                return None
+            return np.frombuffer(data, dtype=np.uint8).reshape(h, w, 3).copy()
+        except Exception:
+            return None
+
+    def get_detections(self) -> Tuple[List[dict], float]:
+        """Get latest detections and inference time."""
+        with self._lock:
+            return self._latest_detections[:], self._latest_infer_ms
+
+    def shutdown(self):
+        """Stop stream subprocess and clean up."""
+        logger.info("Shutting down DRP-AI stream")
+        self._running = False
+        if self._shm is not None:
+            try:
+                self._shm.close()
+            except Exception:
+                pass
+            self._shm = None
+        if self._shm_fd >= 0:
+            try:
+                os.close(self._shm_fd)
+            except Exception:
+                pass
+            self._shm_fd = -1
+        if self._proc is not None:
+            try:
+                self._proc.send_signal(signal.SIGTERM)
+                self._proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait(timeout=2)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+            self._proc = None

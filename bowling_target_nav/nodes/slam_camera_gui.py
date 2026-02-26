@@ -83,7 +83,7 @@ class ThreadSafeState:
         self._robot_theta = 0.0
 
         # LiDAR data
-        self._laser_points = []
+        self._laser_points = np.empty((0, 2), dtype=np.float32)
         self._scan_count = 0
 
         # Camera data
@@ -191,9 +191,9 @@ class ThreadSafeState:
     def get_laser(self):
         """Get laser points copy."""
         if not self._try_lock():
-            return [], 0
+            return np.empty((0, 2), dtype=np.float32), 0, 0.0
         try:
-            return self._laser_points[:], self._scan_count
+            return self._laser_points.copy(), self._scan_count, 0.0
         finally:
             self._release_lock()
 
@@ -319,15 +319,20 @@ class SlamCameraNode(Node):
         if not state.running:
             return
         try:
-            # Convert scan to points
-            points = []
-            angle = msg.angle_min
-            for r in msg.ranges:
-                if msg.range_min < r < msg.range_max:
-                    x = r * math.cos(angle)
-                    y = r * math.sin(angle)
-                    points.append((x, y))
-                angle += msg.angle_increment
+            # Convert scan to points (vectorized with numpy)
+            ranges = np.array(msg.ranges, dtype=np.float32)
+            n = len(ranges)
+            angles = np.linspace(
+                msg.angle_min,
+                msg.angle_min + (n - 1) * msg.angle_increment,
+                n, dtype=np.float32)
+            valid = (ranges > msg.range_min) & (ranges < msg.range_max)
+            r_v = ranges[valid]
+            a_v = angles[valid]
+            if len(r_v) > 0:
+                points = np.column_stack((r_v * np.cos(a_v), r_v * np.sin(a_v)))
+            else:
+                points = np.empty((0, 2), dtype=np.float32)
             state.set_laser(points)
 
             # Get robot pose from TF
@@ -645,7 +650,7 @@ class SlamCameraGUI(Gtk.Window):
         # Get data from state (with timeout protection)
         local_map, info, mc = state.get_map()
         rx, ry, rt = state.get_robot_pose()
-        lpoints, sc = state.get_laser()
+        lpoints, sc, _ = state.get_laser()
 
         content_y = y + 35
         content_h = h - 70
@@ -673,15 +678,23 @@ class SlamCameraGUI(Gtk.Window):
                 for gy in range(0, disp_h, ppm):
                     cv2.line(disp_map, (0, gy), (disp_w, gy), COLOR_GRID, 1)
 
-            # Draw laser points
-            cos_t, sin_t = math.cos(rt), math.sin(rt)
-            for lx, ly in lpoints:
-                wx = rx + lx * cos_t - ly * sin_t
-                wy = ry + lx * sin_t + ly * cos_t
-                px = int((wx - ox) / res * scale)
-                py = int(disp_h - (wy - oy) / res * scale)
-                if 0 <= px < disp_w and 0 <= py < disp_h:
-                    cv2.circle(disp_map, (px, py), 2, COLOR_LASER, -1)
+            # Draw laser points (vectorized)
+            if len(lpoints) > 0:
+                lp = np.asarray(lpoints, dtype=np.float32)
+                cos_t, sin_t = math.cos(rt), math.sin(rt)
+                wx = rx + lp[:, 0] * cos_t - lp[:, 1] * sin_t
+                wy = ry + lp[:, 0] * sin_t + lp[:, 1] * cos_t
+                lpx = ((wx - ox) / res * scale).astype(np.int32)
+                lpy = (disp_h - (wy - oy) / res * scale).astype(np.int32)
+                vmask = (lpx >= 0) & (lpx < disp_w) & (lpy >= 0) & (lpy < disp_h)
+                vx_pts = lpx[vmask]
+                vy_pts = lpy[vmask]
+                for dy in range(-2, 3):
+                    for dx in range(-2, 3):
+                        if dx * dx + dy * dy <= 4:
+                            yy = np.clip(vy_pts + dy, 0, disp_h - 1)
+                            xx = np.clip(vx_pts + dx, 0, disp_w - 1)
+                            disp_map[yy, xx] = COLOR_LASER
 
             # Draw robot
             rpx = int((rx - ox) / res * scale)

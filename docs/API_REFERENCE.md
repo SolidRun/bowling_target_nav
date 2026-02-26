@@ -191,7 +191,8 @@ Navigator(state, cmd_vel_pub, tf_buffer, nav_client, logger)
 | `direct_navigate` | `(target_x, target_y, distance)` | `None` | Mecanum navigation with obstacle avoidance |
 | `enter_blind_approach` | `()` | `bool` | Switch to dead-reckoning mode |
 | `blind_approach_step` | `()` | `None` | Execute one tick of dead-reckoning |
-| `search_rotate` | `()` | `None` | Rotate in place to find target |
+| `start_search_scan` | `()` | `None` | Initialize 360° search rotation (records start yaw) |
+| `search_rotate` | `()` | `bool` | Execute one tick of 360° search scan. Returns `True` when 360° complete. |
 | `stop_robot` | `()` | `None` | Emergency stop, reset timers |
 | `check_obstacles` | `()` | `(min_front, left_free, right_free)` | LiDAR obstacle detection |
 
@@ -254,8 +255,8 @@ Creates `MainGuiNode(Node)` and spins it.
    - Target visible → navigate_to_target()
    - Lost < 3s → drift forward
    - Lost > 3s + close → enter blind approach
-   - Lost > 3s + far → search rotate
-   - Search timeout → IDLE
+   - Lost > 3s + far → search_rotate() (360° scan)
+   - 360° complete OR safety timeout → IDLE
    - ARRIVED → stop (terminal)
 ```
 
@@ -271,8 +272,9 @@ Main camera worker running in its own thread.
 
 #### Detection Priority
 
-1. **DRP-AI** (V2N only): `find_drp_binary()` + `find_drp_model()` → `DrpBinaryDetector`
-2. **ONNX CPU** (fallback): `find_model_path()` → `YoloOnnxDetector`
+1. **DRP-AI Stream** (V2N only, fastest): `DrpStreamDetector` — C++ owns camera + inference, Python reads via shared memory
+2. **DRP-AI Pipe** (V2N fallback): `DrpBinaryDetector` — Python sends frames to C++ subprocess
+3. **ONNX CPU** (fallback): `find_model_path()` → `YoloOnnxDetector`
 
 #### Key Functions
 
@@ -402,6 +404,34 @@ DrpBinaryDetector(
 - Sends frames as binary (width, height, BGR pixels)
 - Receives JSON detections on stdout
 - 10-20x faster than ONNX CPU on V2N
+
+---
+
+### `DrpStreamDetector` (detectors/drp_binary_detector.py)
+
+```python
+DrpStreamDetector(
+    binary_path=None,             # Auto-find
+    model_dir=None,               # Auto-find
+    confidence_threshold=0.5,
+    class_names=None,
+    startup_timeout=30.0,
+)
+```
+
+- Launches C++ binary with `--stream` flag (C++ owns camera + inference)
+- Reads camera frames from shared memory `/dev/shm/v2n_camera` via mmap (zero-copy)
+- Reads JSON detections from stdout via background reader thread
+- Fastest mode: eliminates ~921KB pipe transfer per frame
+
+| Method | Signature | Returns | Description |
+|--------|-----------|---------|-------------|
+| `initialize` | `()` | `bool` | Launch subprocess, wait for READY, open shared memory |
+| `get_frame` | `()` | `ndarray or None` | Read latest BGR frame from shared memory |
+| `get_detections` | `()` | `(list[dict], float)` | Get latest detections and inference time (ms) |
+| `shutdown` | `()` | `None` | Stop subprocess and clean up |
+
+---
 
 #### Helper Functions
 

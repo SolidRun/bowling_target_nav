@@ -1,5 +1,5 @@
 -- Cartographer Configuration for RZ/V2N
--- 2D LiDAR SLAM with wheel odometry
+-- 2D LiDAR-only SLAM (no odometry required)
 
 include "map_builder.lua"
 include "trajectory_builder.lua"
@@ -13,7 +13,7 @@ options = {
   odom_frame = "odom",
   provide_odom_frame = true,
   publish_frame_projected_to_2d = true,
-  use_odometry = true,
+  use_odometry = false,
   use_nav_sat = false,
   use_landmarks = false,
   num_laser_scans = 1,

@@ -225,7 +225,7 @@ Controls the main navigation behavior.
 | Angular Speed | 0.1–1.0 | 0.5 | rad/s | Maximum rotation speed |
 | Approach Distance | 0.05–0.50 | 0.15 | m | Distance to declare "arrived" |
 | Lost Timeout | 1.0–10.0 | 3.0 | s | Seconds before switching to blind/search |
-| Search Timeout | 10.0–60.0 | 30.0 | s | Give up searching after this |
+| Search Timeout | 10.0–60.0 | 30.0 | s | Safety timeout (search also stops after 360° scan) |
 | Search Angular Speed | 0.1–1.0 | 0.4 | rad/s | Rotation speed when searching |
 
 ### Tab 2: Blind Approach

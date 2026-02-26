@@ -28,6 +28,34 @@ def draw_camera_panel(cr, x, y, w, h, state):
     cr.move_to(x + 10, y + 20)
     cr.show_text("Camera + Detection")
 
+    # Detector mode badge (top-right of header)
+    det_mode = state.detection.get_detector_mode()
+    if "DRP-AI" in det_mode:
+        badge_bg = (0.0, 0.6, 0.15)
+        badge_fg = (1.0, 1.0, 1.0)
+    elif "ONNX" in det_mode:
+        badge_bg = (0.75, 0.6, 0.0)
+        badge_fg = (1.0, 1.0, 1.0)
+    elif det_mode == "Initializing":
+        badge_bg = (0.35, 0.38, 0.42)
+        badge_fg = (0.8, 0.8, 0.8)
+    else:
+        badge_bg = (0.5, 0.15, 0.15)
+        badge_fg = (1.0, 1.0, 1.0)
+
+    cr.set_font_size(10)
+    extents = cr.text_extents(det_mode)
+    bw = extents.width + 12
+    bh = 16
+    bx = x + w - 10 - bw
+    by = y + 8
+    cr.set_source_rgb(*badge_bg)
+    cr.rectangle(bx, by, bw, bh)
+    cr.fill()
+    cr.set_source_rgb(*badge_fg)
+    cr.move_to(bx + 6, by + 12)
+    cr.show_text(det_mode)
+
     frame, detections, info, det_age = state.detection.get_camera()
     nav_state, _ = state.nav.get_nav_state()
 
@@ -54,8 +82,8 @@ def draw_camera_panel(cr, x, y, w, h, state):
         Gdk.cairo_set_source_pixbuf(cr, pixbuf, disp_x, disp_y)
         cr.paint()
 
-        # Crosshair on best detection
-        if detections and det_age < 1.5:
+        # Crosshair on best detection (skip in stream mode — C++ draws it)
+        if detections and det_age < 1.5 and not state.detection.get_stream_mode():
             best = min(detections, key=lambda d: d.get('distance', 999))
             bx1, by1, bx2, by2 = best['bbox']
             cx = disp_x + int((bx1 + bx2) / 2.0 * scale)

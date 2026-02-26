@@ -525,9 +525,10 @@ control_loop() — runs every 50ms in ros_node.py
 │  │  User presses GO again.  │   (dead-reckon to last position)   │
 │  │                          │                                    │
 │  ├─ Otherwise:              ├─ > lost_timeout AND far:           │
-│  │  navigate_to_target()    │   Start SEARCHING (rotate)         │
+│  │  navigate_to_target()    │   Start SEARCHING (360° scan)      │
 │  │                          │                                    │
-│  │                          └─ Search > 30s: Give up → IDLE      │
+│  │                          └─ 360° complete: Give up → IDLE     │
+│  │                          └─ Safety timeout 30s → IDLE         │
 │  └──────────────────────────────────────────────────────────────│
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -540,7 +541,7 @@ The navigation system has 5 states:
                     ┌─────── STOP pressed ──────────────────────┐
                     │                                           │
                     ▼         GO pressed                        │
-              ┌──► IDLE ◄────────────── Search timeout (30s)   │
+              ┌──► IDLE ◄────────────── 360° scan complete      │
               │     │                                           │
               │     │ No target visible                         │
               │     ▼                                           │
@@ -570,7 +571,7 @@ The navigation system has 5 states:
 | State | Color | What's Happening |
 |-------|-------|------------------|
 | **IDLE** | Gray | Waiting for user to press GO |
-| **SEARCHING** | Yellow | Rotating in place looking for pins |
+| **SEARCHING** | Yellow | 360° odometry-tracked scan looking for pins (stops after full rotation) |
 | **NAVIGATING** | Green | Driving toward a visible pin |
 | **BLIND_APPROACH** | Orange | Dead-reckoning to last known pin position (camera lost it) |
 | **ARRIVED** | Blue | Reached the target. Stopped. Terminal — press GO to restart. |
@@ -1099,7 +1100,7 @@ The GUI is a fullscreen GTK3 window rendered on the robot's MIPI-DSI display via
 Color-coded with Pango markup:
 
 - 🟢 **NAVIGATING** — Green, shows target distance + speed
-- 🟡 **SEARCHING** — Yellow, shows search time + time since target lost
+- 🟡 **SEARCHING** — Yellow, shows 360° scan progress + time since target lost
 - 🟠 **BLIND APPROACH** — Orange, shows dead-reckoning status
 - 🔵 **ARRIVED** — Blue, "at target!"
 - ⚪ **IDLE** — Gray, "Press GO to start"

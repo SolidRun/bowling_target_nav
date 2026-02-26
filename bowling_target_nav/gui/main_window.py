@@ -114,25 +114,40 @@ class MainGUI(Gtk.Window):
         vx, vy, wz = snap['cmd_vel']
         speed = math.sqrt(vx * vx + vy * vy)
 
-        obs_str = (f" | <span foreground='#f85149'>OBS {snap['obstacle_dist']:.2f}m</span>"
+        obs_str = (f" <span foreground='#ff6b6b' weight='bold'>\u26a0 OBS {snap['obstacle_dist']:.2f}m</span>"
                    if snap['obstacle_ahead'] else "")
-        spd_str = f" | {speed:.2f} m/s" if speed > 0.01 else ""
+        spd_str = (f" <span foreground='#79c0ff'>\u2192 {speed:.2f} m/s</span>"
+                   if speed > 0.01 else "")
 
         if nav_state == "SEARCHING":
-            markup = (f"<span foreground='#e3b341'>\u25cf SEARCHING</span> "
-                      f"({search_time:.0f}s) | Lost {time_since_target:.0f}s{obs_str}")
+            markup = (f"<span foreground='#f0d050' weight='bold' size='large'>"
+                      f"\u25cf SEARCHING</span>  "
+                      f"<span foreground='#b0b8c2'>{search_time:.0f}s elapsed</span>"
+                      f"  <span foreground='#8899aa'>Lost {time_since_target:.0f}s</span>"
+                      f"{obs_str}")
         elif nav_state == "BLIND_APPROACH":
-            markup = (f"<span foreground='#ffa657'>\u25cf BLIND APPROACH</span> "
-                      f"| Dead-reckoning | Lost {time_since_target:.0f}s{spd_str}{obs_str}")
+            markup = (f"<span foreground='#ffb347' weight='bold' size='large'>"
+                      f"\u25cf BLIND APPROACH</span>  "
+                      f"<span foreground='#b0b8c2'>Dead-reckoning</span>"
+                      f"  <span foreground='#8899aa'>Lost {time_since_target:.0f}s</span>"
+                      f"{spd_str}{obs_str}")
         elif nav_state == "NAVIGATING" and nav_target:
-            markup = (f"<span foreground='#3fb950'>\u25cf NAVIGATING</span> "
-                      f"| Target: {nav_target[2]:.2f}m{spd_str}{obs_str}")
+            markup = (f"<span foreground='#50fa7b' weight='bold' size='large'>"
+                      f"\u25cf NAVIGATING</span>  "
+                      f"<span foreground='#e0e6ed'>Target: "
+                      f"<b>{nav_target[2]:.2f}m</b></span>"
+                      f"{spd_str}{obs_str}")
         elif nav_state == "ARRIVED":
-            markup = "<span foreground='#58a6ff'>\u25cf ARRIVED</span> at target!"
+            markup = (f"<span foreground='#69b4ff' weight='bold' size='large'>"
+                      f"\u2714 ARRIVED</span>  "
+                      f"<span foreground='#c0c8d2'>at target!</span>")
         elif nav_state == "ERROR":
-            markup = "<span foreground='#f85149'>\u25cf ERROR</span>"
+            markup = (f"<span foreground='#ff6b6b' weight='bold' size='large'>"
+                      f"\u2716 ERROR</span>")
         else:
-            markup = "<span foreground='#8b949e'>\u25cb IDLE</span> | Press GO to start"
+            markup = (f"<span foreground='#6e7681' size='large'>"
+                      f"\u25cb IDLE</span>  "
+                      f"<span foreground='#8899aa'>Press <b>GO</b> to start</span>")
 
         self.status_label.set_markup(markup)
 
@@ -159,10 +174,19 @@ class MainGUI(Gtk.Window):
             cr.move_to(margin, 36)
             cr.show_text("V2N Robot Control")
 
-            cr.set_source_rgb(0.55, 0.59, 0.63)
             cr.set_font_size(14)
+            det_mode = self._state.detection.get_detector_mode()
+            if "DRP-AI" in det_mode:
+                cr.set_source_rgb(0.0, 0.8, 0.3)
+                subtitle = f"SLAM + {det_mode} + Navigation"
+            elif "ONNX" in det_mode:
+                cr.set_source_rgb(0.85, 0.7, 0.0)
+                subtitle = f"SLAM + {det_mode} + Navigation"
+            else:
+                cr.set_source_rgb(0.55, 0.59, 0.63)
+                subtitle = "SLAM + Camera + Navigation"
             cr.move_to(margin + 280, 36)
-            cr.show_text("SLAM + Camera + Navigation")
+            cr.show_text(subtitle)
 
             # Delegate to panel renderers
             draw_map_panel(cr, map_x, map_y, panel_w, panel_h, self._state)

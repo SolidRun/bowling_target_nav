@@ -277,15 +277,19 @@ Singleton access:
 │  └─ FPS counter                                             │
 └──────────────────────────────────────────────────────────────┘
 
-Detection Flow:
-  1. Camera grabs frame (non-blocking)
-  2. Check if async future is done → cache results
-  3. Expire old detections (> detect_expiry seconds)
-  4. Submit new detection if rate allows:
-     - DRP-AI: every detect_interval (default 2.0s)
-     - ONNX: every frame (when no pending future)
-  5. Draw cached detections on display frame
-  6. Store in DetectionStore with fresh flag
+Detection Flow (3-tier priority):
+  1. DRP-AI Stream mode (C++ owns camera + inference, fastest):
+     - C++ binary writes frames to /dev/shm/v2n_camera (shared memory)
+     - C++ binary writes JSON detections to stdout
+     - Python reads via mmap (zero-copy) + JSON reader thread
+  2. DRP-AI Pipe mode (Python sends frames to C++):
+     - Camera grabs frame → send via stdin → read JSON from stdout
+  3. ONNX CPU mode (fallback):
+     - Camera grabs frame (non-blocking)
+     - Submit to ThreadPoolExecutor (async)
+     - Draw cached detections on display frame
+  Each tier falls back to the next if initialization fails.
+  In pipe/ONNX modes: expire old detections (> detect_expiry seconds)
 ```
 
 ### Strategy Pattern for Detectors
@@ -306,14 +310,17 @@ Detection Flow:
            ├── detect_target(frame) → Detection
            └── get_stats() → dict
                 │
-      ┌─────────┴──────────┐
-      ▼                    ▼
-YoloOnnxDetector    DrpBinaryDetector
-├── ONNX Runtime    ├── C++ subprocess
-├── CPU inference   ├── stdin/stdout pipe
-├── YOLOv5/v8       ├── DRP-AI hardware
-├── NMS + filtering ├── JSON response
-└── Auto model find └── 10-20x faster
+      ┌─────────┼──────────┐
+      ▼         ▼          ▼
+YoloOnnx    DrpBinary    DrpStream
+Detector    Detector     Detector
+├── ONNX    ├── C++ sub  ├── C++ owns camera
+├── CPU     ├── stdin/   ├── Shared memory
+├── YOLOv5  │   stdout   │   (/dev/shm)
+│   /v8     ├── DRP-AI   ├── JSON stdout
+├── NMS     ├── JSON     ├── Zero-copy frames
+└── Auto    └── 10-20x   └── Fastest mode
+    find        faster
 ```
 
 ---
@@ -348,8 +355,8 @@ YoloOnnxDetector    DrpBinaryDetector
 │  │  └── NO                                                   │  │
 │  │       ├── Lost < 3s → drift forward (min speed)          │  │
 │  │       ├── Lost > 3s + close → enter_blind_approach()     │  │
-│  │       ├── Lost > 3s + far → search_rotate()              │  │
-│  │       └── Search timeout → IDLE                           │  │
+│  │       ├── Lost > 3s + far → search_rotate() (360° scan)  │  │
+│  │       └── 360° complete OR safety timeout → IDLE          │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │                                                                │
 │  Output: /cmd_vel (Twist)                                      │
@@ -383,13 +390,13 @@ LiDAR Point Classification:
     │       │ T │       │
     └───────┘   └───────┘
 
-Decision:
+Decision (VFH — Vector Field Histogram):
   min_front < 0.25m (obstacle)?
   ├── YES
   │   ├── min_front < 0.15m → STOP (stuck > 3s → backup)
-  │   ├── left_free → strafe LEFT
-  │   ├── right_free → strafe RIGHT
-  │   └── both blocked → BACKUP
+  │   ├── VFH gap-finding → steer through best open gap
+  │   │   (committed direction to prevent oscillation)
+  │   └── no gap found → BACKUP
   └── NO
       ├── min_front < 0.5m → slowdown (proportional)
       └── min_front > 0.5m → full speed
@@ -529,7 +536,7 @@ Main GUI (standalone):
 │  ├── Arrival hysteresis (1.5x band prevents oscillation)       │
 │  ├── Detection expiry (1.5s stale → discard)                  │
 │  ├── Lost timeout (3s before blind approach or search)         │
-│  ├── Search timeout (30s → give up)                            │
+│  ├── 360° search scan (odometry-tracked, safety timeout 30s)   │
 │  └── Blind approach timeout (8s → abort)                       │
 │                                                                │
 │  Layer 5: THREAD SAFETY                                         │

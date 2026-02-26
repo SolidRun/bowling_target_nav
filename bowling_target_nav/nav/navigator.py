@@ -59,7 +59,7 @@ class Navigator:
         self.angular_speed = 0.5
         self.obstacle_distance = 0.25
         self.obstacle_slowdown_distance = 0.5
-        self.robot_half_width = 0.15
+        self.robot_half_width = 0.18
         self.search_angular_speed = 0.4
         self.lost_timeout = 3.0
         self.search_timeout = 30.0
@@ -81,6 +81,18 @@ class Navigator:
         self._last_nav_log = 0.0
         self._last_obs_log = 0.0
         self._stuck_start = 0.0  # For stuck detection
+
+        # VFH obstacle avoidance state
+        self._avoid_direction = 0     # -1=right, +1=left, 0=none
+        self._avoid_start_time = 0.0
+        self._avoid_min_commit = 1.5  # seconds to commit before allowing switch
+        self._avoid_clear_count = 0   # consecutive obstacle-free ticks
+
+        # 360° search scan state
+        self._search_start_yaw = 0.0
+        self._search_last_yaw = 0.0
+        self._search_total_rotated = 0.0
+        self._search_initialized = False
 
         # Arrival confirmation (temporal filter)
         self._arrival_first_seen = 0.0   # timestamp when first "close" reading
@@ -228,45 +240,79 @@ class Navigator:
         self.direct_navigate(target_x, target_y, distance)
 
     def direct_navigate(self, target_x, target_y, distance):
-        """Mecanum holonomic navigation with LiDAR obstacle avoidance.
+        """Mecanum holonomic navigation with VFH obstacle avoidance.
 
-        Arrival detection is handled by _check_arrival() in navigate_to_target().
-        This method only handles movement and obstacle avoidance.
+        Uses Vector Field Histogram (VFH) gap-finding to steer around obstacles
+        instead of simple left/right strafing. Commits to a direction to prevent
+        oscillation.
         """
         angle = math.atan2(target_y, target_x)
         cmd = Twist()
+        now = time.time()
 
         min_front, left_free, right_free = self.check_obstacles()
         self._state.nav.set_obstacle(min_front < self.obstacle_distance, min_front)
 
         if min_front < self.obstacle_distance:
-            # Obstacle avoidance with mecanum strafing
+            # --- OBSTACLE: VFH avoidance ---
             if min_front < self.approach_distance:
-                # Emergency stop - too close
+                # Emergency: too close
                 if self._stuck_start == 0.0:
-                    self._stuck_start = time.time()
-                elif time.time() - self._stuck_start > 3.0:
-                    # Stuck for 3s: back up
+                    self._stuck_start = now
+                elif now - self._stuck_start > 3.0:
                     cmd.linear.x = -self.linear_speed * 0.3
                     self._stuck_start = 0.0
-                # else: hold position (zero cmd)
-            elif left_free and (not right_free or angle > 0):
-                cmd.linear.y = self.linear_speed * 0.5
-                cmd.linear.x = self.linear_speed * 0.15
-                self._stuck_start = 0.0
-            elif right_free:
-                cmd.linear.y = -self.linear_speed * 0.5
-                cmd.linear.x = self.linear_speed * 0.15
-                self._stuck_start = 0.0
             else:
-                # Both sides blocked - back up
-                cmd.linear.x = -self.linear_speed * 0.3
                 self._stuck_start = 0.0
+                gap_angle = self._find_best_gap(angle)
 
-            if time.time() - self._last_obs_log > 1.0:
-                self._logger.warn(f"OBSTACLE at {min_front:.2f}m! L:{left_free} R:{right_free}")
-                self._last_obs_log = time.time()
+                if gap_angle is not None:
+                    # Commit to avoidance direction (prevents oscillation)
+                    gap_side = 1 if gap_angle > 0 else -1
+                    if self._avoid_direction == 0:
+                        # First entry: commit
+                        self._avoid_direction = gap_side
+                        self._avoid_start_time = now
+                    elif now - self._avoid_start_time > self._avoid_min_commit:
+                        # Commitment expired: allow switching
+                        self._avoid_direction = gap_side
+
+                    # If committed direction still has a gap, prefer it
+                    # Otherwise follow best gap regardless
+                    if self._avoid_direction != gap_side:
+                        # Check if committed side has any valid gap
+                        committed_gap = self._find_committed_gap(angle)
+                        if committed_gap is not None:
+                            gap_angle = committed_gap
+
+                    # Drive through the gap
+                    speed = self.linear_speed * 0.6
+                    cmd.linear.x = speed * math.cos(gap_angle)
+                    cmd.linear.y = speed * math.sin(gap_angle)
+                    cmd.angular.z = max(-self.angular_speed * 0.3,
+                                        min(self.angular_speed * 0.3,
+                                            gap_angle * 0.3))
+                else:
+                    # No gap: back up
+                    cmd.linear.x = -self.linear_speed * 0.3
+                    self._avoid_direction = 0
+
+            if now - self._last_obs_log > 1.0:
+                self._logger.warn(
+                    f"OBSTACLE at {min_front:.2f}m! "
+                    f"avoid={'L' if self._avoid_direction > 0 else 'R' if self._avoid_direction < 0 else '-'}")
+                self._last_obs_log = now
         else:
+            # --- CLEAR PATH ---
+            # Only reset avoidance after sustained clearance (5 ticks ~0.5s)
+            if self._avoid_direction != 0:
+                self._avoid_clear_count += 1
+                if self._avoid_clear_count >= 5:
+                    self._avoid_direction = 0
+                    self._avoid_clear_count = 0
+            else:
+                self._avoid_clear_count = 0
+
             self._stuck_start = 0.0
             speed_scale = min(1.0, distance / 0.40)
             speed = self.linear_speed * max(0.4, speed_scale)
@@ -290,8 +336,57 @@ class Navigator:
                 cmd.linear.x *= scale_up
                 cmd.linear.y *= scale_up
 
-        # _publish_cmd handles max speed cap and NaN guard
         self._publish_cmd(cmd)
+
+    def _find_committed_gap(self, target_angle):
+        """Find the best gap on the committed avoidance side."""
+        points, _, _ = self._state.sensors.get_laser()
+        if len(points) == 0:
+            return None
+
+        num_bins = 36
+        bin_size = math.pi / num_bins
+        histogram = [float('inf')] * num_bins
+
+        for x, y in points:
+            if not (math.isfinite(x) and math.isfinite(y)):
+                continue
+            dist = math.sqrt(x * x + y * y)
+            if dist < 0.03:
+                continue
+            ang = math.atan2(y, x)
+            if abs(ang) > math.pi / 2:
+                continue
+            idx = int((ang + math.pi / 2) / bin_size)
+            idx = max(0, min(num_bins - 1, idx))
+            histogram[idx] = min(histogram[idx], dist)
+
+        clear_dist = self.obstacle_distance + 0.10
+        body_angle = 2.0 * math.atan2(self.robot_half_width + 0.03, clear_dist)
+        body_bins = max(1, int(math.ceil(body_angle / bin_size)))
+        half_body = body_bins // 2
+
+        best_angle = None
+        best_cost = float('inf')
+
+        for i in range(num_bins):
+            gap_angle = -math.pi / 2 + (i + 0.5) * bin_size
+            # Only check committed side
+            if self._avoid_direction > 0 and gap_angle < 0:
+                continue
+            if self._avoid_direction < 0 and gap_angle > 0:
+                continue
+            lo = max(0, i - half_body)
+            hi = min(num_bins, i + half_body + 1)
+            if all(histogram[j] > clear_dist for j in range(lo, hi)):
+                cost = abs(math.atan2(
+                    math.sin(gap_angle - target_angle),
+                    math.cos(gap_angle - target_angle)))
+                if cost < best_cost:
+                    best_cost = cost
+                    best_angle = gap_angle
+
+        return best_angle
 
     def enter_blind_approach(self):
         """Enter blind approach mode: dead-reckon to last known pin position."""
@@ -364,7 +459,7 @@ class Navigator:
             return
 
         # Exit: LiDAR obstacle
-        min_front, _, _ = self.check_obstacles()
+        min_front, left_free, right_free = self.check_obstacles()
         if min_front < self.blind_approach_lidar_stop:
             self._logger.info(f"BLIND_APPROACH: LiDAR stop at {min_front:.3f}m")
             self.stop_robot()
@@ -389,13 +484,51 @@ class Navigator:
         cmd.linear.y = speed * math.sin(heading_error)
         cmd.angular.z = max(-0.2, min(0.2, 0.5 * heading_error))
 
+        # Side obstacle protection: suppress lateral velocity into blocked side
+        if not left_free and cmd.linear.y > 0:
+            cmd.linear.y = 0.0
+        if not right_free and cmd.linear.y < 0:
+            cmd.linear.y = 0.0
+        # Slow down when front obstacle is close
+        if min_front < self.obstacle_distance:
+            cmd.linear.x *= 0.3
+
         self._publish_cmd(cmd)
 
+    def start_search_scan(self):
+        """Initialize a 360° search rotation."""
+        _, _, yaw = self._state.sensors.get_robot_pose()
+        self._search_start_yaw = yaw
+        self._search_last_yaw = yaw
+        self._search_total_rotated = 0.0
+        self._search_initialized = True
+        self._logger.info(
+            f"360° search scan started at yaw={math.degrees(yaw):.1f}°")
+
     def search_rotate(self):
-        """Rotate in place to search for targets."""
-        cmd = Twist()
+        """Execute one tick of 360° search scan. Returns True when complete."""
+        if not self._search_initialized:
+            self.start_search_scan()
+
+        # Track rotation via odometry
+        _, _, current_yaw = self._state.sensors.get_robot_pose()
+        delta = math.atan2(
+            math.sin(current_yaw - self._search_last_yaw),
+            math.cos(current_yaw - self._search_last_yaw))
+        self._search_total_rotated += abs(delta)
+        self._search_last_yaw = current_yaw
+
+        # Check if we've completed 360° (~6.28 radians)
+        if self._search_total_rotated >= 2 * math.pi:
+            self.stop_robot()
+            self._search_initialized = False
+            self._logger.info("360° search scan complete - target not found")
+            return True  # Search complete, target not found
+
+        # Determine rotation direction (toward last known target angle)
         direction = 1.0 if self.last_target_angle >= 0 else -1.0
 
+        # Obstacle avoidance during search
         min_front, left_free, right_free = self.check_obstacles()
         if min_front < self.obstacle_distance:
             if direction > 0 and not left_free:
@@ -403,8 +536,10 @@ class Navigator:
             elif direction < 0 and not right_free:
                 direction = 1.0
 
+        cmd = Twist()
         cmd.angular.z = self.search_angular_speed * direction
-        self._cmd_vel_pub.publish(cmd)
+        self._publish_cmd(cmd)
+        return False  # Still searching
 
     def stop_robot(self):
         """Stop all robot motion."""
@@ -413,26 +548,93 @@ class Navigator:
         self._state.nav.set_current_cmd_vel(0.0, 0.0, 0.0)
         self._stuck_start = 0.0
         self._arrival_first_seen = 0.0
+        self._avoid_direction = 0
+        self._avoid_clear_count = 0
+        self._search_initialized = False
+
+    def _find_best_gap(self, target_angle):
+        """VFH-lite: find the best open direction toward the target.
+
+        Builds a polar histogram from LiDAR, finds gaps wide enough for the
+        robot body, and returns the gap direction closest to target_angle.
+
+        Returns steering angle in robot frame, or None if no gap found.
+        """
+        points, _, laser_time = self._state.sensors.get_laser()
+        if len(points) == 0:
+            return None
+
+        # Polar histogram: front 180° in 5° bins
+        num_bins = 36
+        bin_size = math.pi / num_bins
+        histogram = [float('inf')] * num_bins
+
+        for x, y in points:
+            if not (math.isfinite(x) and math.isfinite(y)):
+                continue
+            dist = math.sqrt(x * x + y * y)
+            if dist < 0.03:
+                continue
+            ang = math.atan2(y, x)
+            if abs(ang) > math.pi / 2:
+                continue  # behind robot
+            idx = int((ang + math.pi / 2) / bin_size)
+            idx = max(0, min(num_bins - 1, idx))
+            histogram[idx] = min(histogram[idx], dist)
+
+        # How many bins the robot body spans at the clearance distance
+        clear_dist = self.obstacle_distance + 0.10
+        body_angle = 2.0 * math.atan2(self.robot_half_width + 0.03, clear_dist)
+        body_bins = max(1, int(math.ceil(body_angle / bin_size)))
+        half_body = body_bins // 2
+
+        # Score each direction: must be clear for robot width, prefer closer to target
+        best_angle = None
+        best_cost = float('inf')
+
+        for i in range(num_bins):
+            lo = max(0, i - half_body)
+            hi = min(num_bins, i + half_body + 1)
+            if all(histogram[j] > clear_dist for j in range(lo, hi)):
+                gap_angle = -math.pi / 2 + (i + 0.5) * bin_size
+                cost = abs(math.atan2(
+                    math.sin(gap_angle - target_angle),
+                    math.cos(gap_angle - target_angle)))
+                if cost < best_cost:
+                    best_cost = cost
+                    best_angle = gap_angle
+
+        return best_angle
 
     def check_obstacles(self):
         """Check LiDAR for obstacles. Returns (min_front_dist, left_free, right_free).
 
-        Filters out NaN/Inf laser points to prevent invalid obstacle decisions.
+        Fail-safe: returns (0.0, False, False) if LiDAR data is stale or empty,
+        which triggers emergency stop rather than driving blind.
         """
-        points, _ = self._state.sensors.get_laser()
+        points, _, laser_time = self._state.sensors.get_laser()
+
+        # Fail-safe: stale or missing LiDAR data → assume obstacle everywhere
+        if len(points) == 0 or (laser_time > 0 and time.time() - laser_time > 0.5):
+            if time.time() - self._last_obs_log > 2.0:
+                self._logger.warn("LiDAR data stale or empty - fail-safe stop")
+                self._last_obs_log = time.time()
+            return 0.0, False, False
+
         hw = self.robot_half_width
+        # Wider front corridor: use hw + margin to catch angled approaches
+        front_hw = hw + 0.05
         slow_dist = self.obstacle_slowdown_distance
         min_front = float('inf')
         left_free = True
         right_free = True
 
         for x, y in points:
-            # FIX: Skip NaN/Inf points from LiDAR
             if not (math.isfinite(x) and math.isfinite(y)):
                 continue
             if x <= 0 or x > slow_dist:
                 continue
-            if abs(y) < hw:
+            if abs(y) < front_hw:
                 min_front = min(min_front, x)
             if x < slow_dist and hw <= y < hw + 0.4:
                 left_free = False

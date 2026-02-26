@@ -3,6 +3,8 @@
 import threading
 import time
 
+import numpy as np
+
 
 class SensorStore:
     """Thread-safe container for SLAM map, robot pose, and LiDAR scan data."""
@@ -14,11 +16,16 @@ class SensorStore:
         self._map_img = None
         self._map_info = None
         self._map_count = 0
+        self._map_time = 0.0
+        self._map_hz = 0.0
         self._robot_x = 0.0
         self._robot_y = 0.0
         self._robot_theta = 0.0
-        self._laser_points = []
+        self._last_pose_time = 0.0
+        self._laser_points = np.empty((0, 2), dtype=np.float32)
+        self._laser_time = 0.0
         self._scan_count = 0
+        self._scan_hz = 0.0
         self._raw_scan = None
         self._raw_scan_time = 0.0
 
@@ -36,9 +43,15 @@ class SensorStore:
         if not self._try_lock():
             return False
         try:
+            now = time.time()
+            if self._map_time > 0:
+                dt = now - self._map_time
+                if 0 < dt < 30.0:
+                    self._map_hz = 0.3 * (1.0 / dt) + 0.7 * self._map_hz
             self._map_img = img
             self._map_info = info
             self._map_count += 1
+            self._map_time = now
             return True
         finally:
             self._release()
@@ -61,6 +74,7 @@ class SensorStore:
             self._robot_x = x
             self._robot_y = y
             self._robot_theta = theta
+            self._last_pose_time = time.time()
             return True
         finally:
             self._release()
@@ -78,7 +92,13 @@ class SensorStore:
         if not self._try_lock():
             return False
         try:
+            now = time.time()
+            if self._laser_time > 0:
+                dt = now - self._laser_time
+                if 0 < dt < 2.0:
+                    self._scan_hz = 0.3 * (1.0 / dt) + 0.7 * self._scan_hz
             self._laser_points = points
+            self._laser_time = now
             self._scan_count += 1
             return True
         finally:
@@ -86,9 +106,9 @@ class SensorStore:
 
     def get_laser(self):
         if not self._try_lock():
-            return [], 0
+            return np.empty((0, 2), dtype=np.float32), 0, 0.0
         try:
-            return self._laser_points[:], self._scan_count
+            return self._laser_points.copy(), self._scan_count, self._laser_time
         finally:
             self._release()
 
@@ -99,6 +119,25 @@ class SensorStore:
             self._raw_scan = scan_msg
             self._raw_scan_time = time.time()
             return True
+        finally:
+            self._release()
+
+    def get_diagnostics(self):
+        """Return diagnostic snapshot: rates, ages, counts."""
+        if not self._try_lock():
+            return {}
+        try:
+            now = time.time()
+            return {
+                'scan_hz': self._scan_hz,
+                'scan_count': self._scan_count,
+                'scan_age': now - self._laser_time if self._laser_time > 0 else -1,
+                'map_hz': self._map_hz,
+                'map_count': self._map_count,
+                'map_age': now - self._map_time if self._map_time > 0 else -1,
+                'tf_age': now - self._last_pose_time if self._last_pose_time > 0 else -1,
+                'n_points': len(self._laser_points),
+            }
         finally:
             self._release()
 

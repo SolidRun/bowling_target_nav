@@ -17,11 +17,13 @@ class DetectionStore:
         self._detection_time = 0.0
 
         # Tunable params (accessed by camera thread, modified by settings)
-        self._detect_interval = 2.0
-        self._detect_expiry = 1.5
+        self._detect_interval = 0.0
+        self._detect_expiry = 0.5
         self._confidence_threshold = 0.35
         self._ref_box_height = 100.0
         self._ref_distance = 1.0
+        self._stream_mode = False
+        self._detector_mode = "Initializing"
 
     def _try_lock(self, timeout=None):
         return self._lock.acquire(timeout=timeout or self.LOCK_TIMEOUT)
@@ -66,7 +68,7 @@ class DetectionStore:
         if self._try_lock():
             try: return self._detect_interval
             finally: self._release()
-        return 2.0
+        return 0.0
 
     def set_detect_expiry(self, val):
         if self._try_lock():
@@ -77,7 +79,7 @@ class DetectionStore:
         if self._try_lock():
             try: return self._detect_expiry
             finally: self._release()
-        return 1.5
+        return 0.5
 
     def set_confidence_threshold(self, val):
         if self._try_lock():
@@ -102,3 +104,25 @@ class DetectionStore:
             try: return self._ref_box_height, self._ref_distance
             finally: self._release()
         return 100.0, 1.0
+
+    def set_stream_mode(self, enabled):
+        if self._try_lock():
+            try: self._stream_mode = enabled
+            finally: self._release()
+
+    def get_stream_mode(self):
+        if self._try_lock():
+            try: return self._stream_mode
+            finally: self._release()
+        return False
+
+    def set_detector_mode(self, mode):
+        if self._try_lock():
+            try: self._detector_mode = mode
+            finally: self._release()
+
+    def get_detector_mode(self):
+        if self._try_lock():
+            try: return self._detector_mode
+            finally: self._release()
+        return "Initializing"
