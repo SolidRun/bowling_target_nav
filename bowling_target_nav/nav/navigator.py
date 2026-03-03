@@ -54,8 +54,8 @@ class Navigator:
 
         # Navigation parameters (tunable via SettingsWindow)
         self.approach_distance = 0.15
-        self.linear_speed = 0.15
-        self.min_linear_speed = 0.10
+        self.linear_speed = 0.25
+        self.min_linear_speed = 0.18
         self.angular_speed = 0.5
         self.obstacle_distance = 0.25
         self.obstacle_slowdown_distance = 0.5
@@ -71,7 +71,7 @@ class Navigator:
         self.blind_approach_target_map = (0.0, 0.0)
         self.blind_approach_target_distance = 0.0
         self.blind_approach_entry_distance = 0.80
-        self.blind_approach_speed = 0.10
+        self.blind_approach_speed = 0.18
         self.blind_approach_timeout = 8.0
         self.blind_approach_lidar_stop = 0.12
         self.blind_approach_arrival_margin = 0.10
@@ -136,8 +136,10 @@ class Navigator:
                 f"dist={distance:.2f}m, clipped={bbox_clipped}")
             return True
 
-        # Any signal starts the confirmation timer
-        is_close = dist_close or lidar_front_close or lidar_target_close
+        # Require at least 2 of 3 signals to agree (prevents false arrival
+        # from a single noisy LiDAR reading)
+        close_count = sum([dist_close, lidar_front_close, lidar_target_close])
+        is_close = close_count >= 2
 
         if is_close:
             if self._arrival_first_seen == 0.0:
@@ -174,11 +176,16 @@ class Navigator:
         self.last_target_angle = angle
         bbox_clipped = target.get('bbox_clipped', False)
 
-        # LiDAR+Vision fusion
-        lidar_distance = self._state.sensors.get_lidar_distance_at_angle(angle)
-        if lidar_distance < float('inf'):
-            distance = lidar_distance
-            source = "lidar"
+        # Distance fusion: prefer calibrated vision, use LiDAR only when
+        # vision is unreliable (bbox clipped = pin too close for accurate bbox)
+        if bbox_clipped:
+            lidar_distance = self._state.sensors.get_lidar_distance_at_angle(angle)
+            if lidar_distance < float('inf'):
+                distance = lidar_distance
+                source = "lidar"
+            else:
+                distance = vision_distance
+                source = "vision"
         else:
             distance = vision_distance
             source = "vision"

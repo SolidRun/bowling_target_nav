@@ -90,13 +90,18 @@ def draw_rect_np(img, x1, y1, x2, y2, color, thickness=2):
 
 
 def _make_estimator():
-    """Create a DistanceEstimator with default calibration."""
+    """Create a DistanceEstimator with default calibration.
+
+    reference_box_height: bbox height in pixels when pin is at reference_distance.
+    Calibrated: bowling pin at 0.70m actual showed 0.93m with ref=230 → ref=173.
+    """
     return DistanceEstimator(
-        reference_box_height=100.0, reference_distance=1.0,
+        reference_box_height=180.0, reference_distance=1.0,
         frame_width=640, frame_height=480, horizontal_fov=60.0)
 
 
-def _process_raw_detections(raw_dets, frame_h, estimator, confidence_threshold=0.35):
+def _process_raw_detections(raw_dets, frame_h, estimator, confidence_threshold=0.50,
+                            frame_w=640):
     """Convert raw JSON detection dicts to the format used by the GUI/navigator."""
     from bowling_target_nav.detectors.base import Detection
     detections = []
@@ -106,17 +111,21 @@ def _process_raw_detections(raw_dets, frame_h, estimator, confidence_threshold=0
             continue
         x1, y1 = int(d.get('x1', 0)), int(d.get('y1', 0))
         x2, y2 = int(d.get('x2', 0)), int(d.get('y2', 0))
+        bw, bh = x2 - x1, y2 - y1
+        # Reject obviously wrong detections: too small, too flat/wide
+        if bw < 10 or bh < 15:
+            continue
+        if bh > 0 and bw / bh > 2.5:
+            continue  # bowling pins are taller than wide
         det_dict = {
             'class_name': d.get('class_name', 'bowling-pins'),
             'confidence': conf,
             'bbox': (x1, y1, x2, y2),
             'bbox_clipped': (y1 <= 5 or y2 >= frame_h - 5),
         }
-        # Use distance/angle from C++ JSON if available (stream mode)
-        if 'distance' in d and 'angle' in d:
-            det_dict['distance'] = d['distance']
-            det_dict['angle'] = d['angle']
-        elif estimator:
+        # Always recalculate distance from bbox using Python estimator
+        # (C++ stream JSON uses hardcoded ref_box_height=100 which is uncalibrated)
+        if estimator:
             det_obj = Detection(
                 class_name=det_dict['class_name'],
                 class_id=d.get('class_id', 0),
@@ -169,8 +178,10 @@ def _run_stream_mode(shared_state, drp_binary, drp_model):
 
             fresh = False
             if raw_dets:
+                conf_th = shared_state.detection.get_confidence_threshold()
                 cached_detections = _process_raw_detections(
-                    raw_dets, frame.shape[0], estimator)
+                    raw_dets, frame.shape[0], estimator,
+                    confidence_threshold=conf_th, frame_w=frame.shape[1])
                 last_det_time = time.time()
                 fresh = True
 

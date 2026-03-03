@@ -405,7 +405,7 @@ def camera_thread():
             try:
                 detector = YoloDetector(model_path=model_path, conf_threshold=0.5)
                 estimator = DistanceEstimator(
-                    reference_box_height=100.0,
+                    reference_box_height=200.0,
                     reference_distance=1.0,
                     frame_width=640,
                     frame_height=480,

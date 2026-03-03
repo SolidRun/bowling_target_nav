@@ -45,7 +45,7 @@ class DistanceEstimator:
     """
 
     def __init__(self,
-                 reference_box_height: float = 100.0,
+                 reference_box_height: float = 200.0,
                  reference_distance: float = 1.0,
                  frame_width: int = 320,
                  frame_height: int = 240,

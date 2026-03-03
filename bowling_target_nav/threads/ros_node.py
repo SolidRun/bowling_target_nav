@@ -141,6 +141,7 @@ class MainGuiNode(Node):
         if state.nav.check_and_clear_go():
             self.is_active = True
             nav.blind_approach_active = False
+            nav._arrival_first_seen = 0.0  # Reset stale arrival timer
             state.nav.set_nav_state("IDLE", None)
             self.get_logger().info("Navigation activated")
 

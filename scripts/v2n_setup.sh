@@ -592,6 +592,15 @@ else
     warn "remote-desktop failed. Check: journalctl -u remote-desktop"
 fi
 
+# Robot service (bringup + SLAM mapping)
+systemctl restart robot
+sleep 8
+if systemctl is-active --quiet robot; then
+    ok "robot running (bringup + SLAM)"
+else
+    warn "robot failed to start. Check: journalctl -u robot"
+fi
+
 # bowling-launcher needs weston's Wayland display
 systemctl restart bowling-launcher
 sleep 2

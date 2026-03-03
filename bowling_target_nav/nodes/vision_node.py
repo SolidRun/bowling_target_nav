@@ -75,7 +75,7 @@ class VisionNode(Node):
         self.declare_parameter('target_class', 'bowling-pins')
         self.declare_parameter('filter_classes', ['bowling-pins', 'Bowlingpin-bowlingball'])
         self.declare_parameter('conf_threshold', 0.5)
-        self.declare_parameter('reference_box_height', 100.0)
+        self.declare_parameter('reference_box_height', 200.0)
         self.declare_parameter('reference_distance', 1.0)
         self.declare_parameter('publish_rate', 10.0)
         self.declare_parameter('frame_width', 640)

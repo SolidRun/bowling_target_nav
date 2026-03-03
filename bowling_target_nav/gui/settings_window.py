@@ -107,8 +107,8 @@ class SettingsWindow(Gtk.Window):
     def _build_nav_tab(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         s = self._nav_setter
-        box.pack_start(self._make_slider("Linear Speed (m/s)", 0.05, 0.30, 0.01, 0.15, s('linear_speed')), False, False, 0)
-        box.pack_start(self._make_slider("Min Speed (m/s)", 0.05, 0.20, 0.01, 0.10, s('min_linear_speed')), False, False, 0)
+        box.pack_start(self._make_slider("Linear Speed (m/s)", 0.10, 0.40, 0.01, 0.25, s('linear_speed')), False, False, 0)
+        box.pack_start(self._make_slider("Min Speed (m/s)", 0.10, 0.25, 0.01, 0.18, s('min_linear_speed')), False, False, 0)
         box.pack_start(self._make_slider("Angular Speed (rad/s)", 0.1, 1.0, 0.05, 0.5, s('angular_speed')), False, False, 0)
         box.pack_start(self._make_slider("Approach Distance (m)", 0.05, 0.50, 0.01, 0.15, s('approach_distance')), False, False, 0)
         box.pack_start(self._make_slider("Lost Timeout (s)", 1.0, 10.0, 0.5, 3.0, s('lost_timeout')), False, False, 0)
@@ -120,7 +120,7 @@ class SettingsWindow(Gtk.Window):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         s = self._nav_setter
         box.pack_start(self._make_slider("Entry Distance (m)", 0.30, 1.50, 0.05, 0.80, s('blind_approach_entry_distance')), False, False, 0)
-        box.pack_start(self._make_slider("Approach Speed (m/s)", 0.05, 0.20, 0.01, 0.10, s('blind_approach_speed')), False, False, 0)
+        box.pack_start(self._make_slider("Approach Speed (m/s)", 0.10, 0.30, 0.01, 0.18, s('blind_approach_speed')), False, False, 0)
         box.pack_start(self._make_slider("Timeout (s)", 3.0, 15.0, 0.5, 8.0, s('blind_approach_timeout')), False, False, 0)
         box.pack_start(self._make_slider("LiDAR Stop (m)", 0.05, 0.30, 0.01, 0.12, s('blind_approach_lidar_stop')), False, False, 0)
         box.pack_start(self._make_slider("Arrival Margin (m)", 0.05, 0.25, 0.01, 0.10, s('blind_approach_arrival_margin')), False, False, 0)
@@ -129,7 +129,7 @@ class SettingsWindow(Gtk.Window):
     def _build_detection_tab(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         det = self._state.detection
-        box.pack_start(self._make_slider("Confidence Threshold", 0.10, 0.90, 0.05, 0.35,
+        box.pack_start(self._make_slider("Confidence Threshold", 0.10, 0.95, 0.05, 0.50,
                                          lambda v: det.set_confidence_threshold(v)), False, False, 0)
         box.pack_start(self._make_slider("Detection Interval (s)", 0.5, 5.0, 0.1, 2.0,
                                          lambda v: det.set_detect_interval(v)), False, False, 0)

@@ -73,7 +73,7 @@ vision_node:
     # Example: If pin at 1m has box height of 120 pixels:
     #   reference_box_height: 120.0
     #   reference_distance: 1.0
-    reference_box_height: 100.0   # pixels at reference_distance
+    reference_box_height: 200.0   # pixels at reference_distance (bowling pin ~38cm at 1m)
     reference_distance: 1.0       # meters
 
     # Publishing

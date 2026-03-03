@@ -453,9 +453,9 @@ static int run_pipe_mode(DRPAIInference& drpai) {
 static void estimate_distance(float x1, float y1, float x2, float y2,
                                int frame_w, int frame_h,
                                float& out_distance, float& out_angle) {
-    /* Simple pinhole model — matches Python DistanceEstimator defaults:
-     *   reference_box_height=100, reference_distance=1.0, hfov=60 degrees */
-    const float ref_box_height = 100.0f;
+    /* Simple pinhole model — calibrated for bowling pin (~38cm tall).
+     *   At 1m on 640x480 cam with 60deg HFOV, pin bbox ≈ 200px tall. */
+    const float ref_box_height = 200.0f;
     const float ref_distance = 1.0f;
     const float hfov_rad = 60.0f * (float)M_PI / 180.0f;
 

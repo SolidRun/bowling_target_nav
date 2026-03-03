@@ -19,7 +19,7 @@ class DetectionStore:
         # Tunable params (accessed by camera thread, modified by settings)
         self._detect_interval = 0.0
         self._detect_expiry = 0.5
-        self._confidence_threshold = 0.35
+        self._confidence_threshold = 0.50
         self._ref_box_height = 100.0
         self._ref_distance = 1.0
         self._stream_mode = False
