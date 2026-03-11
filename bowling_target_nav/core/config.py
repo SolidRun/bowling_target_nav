@@ -2,12 +2,29 @@
 Configuration Management
 ========================
 
-Provides a centralized configuration system with:
-- YAML file loading
-- Environment variable overrides
-- Default values
-- Type validation
-- Singleton pattern for global access
+Centralized configuration system for the V2N robot control stack.
+
+Structure:
+    Each hardware/software subsystem has a dedicated dataclass (CameraConfig,
+    LidarConfig, NavigationConfig, etc.).  The top-level ``Config`` singleton
+    aggregates them all and provides:
+
+    - **YAML file loading** with search-path fallback (package config dir,
+      ros2_ws, /etc/v2n_robot).
+    - **Environment variable overrides** (prefix ``V2N_``) that take
+      precedence over YAML values.
+    - **Typed defaults** so the system works without any config file.
+
+Usage::
+
+    from bowling_target_nav.core.config import get_config, load_config
+
+    # First call in main entry point:
+    config = load_config("config/robot_config.yaml")
+
+    # Anywhere else:
+    config = get_config()
+    speed = config.navigation.default_linear_speed
 """
 
 import os
@@ -21,17 +38,29 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class TargetConfig:
+    """Target object profile — change this to switch what the robot tracks."""
+    class_name: str = "bottle"             # must match YOLO model class
+    display_name: str = "Bottle"           # for UI/logs
+    filter_classes: list = field(default_factory=lambda: ["bottle"])
+    real_object_height: float = 0.25       # meters (for distance estimation)
+
+
+@dataclass
 class DetectionConfig:
     """Detection system configuration."""
     detector_type: str = "yolo_onnx"
     confidence_threshold: float = 0.5
-    target_class: str = "bowling_pin"
+    target_class: str = "bottle"
     max_detection_rate: int = 10
+
+    # Target profile
+    target: TargetConfig = field(default_factory=TargetConfig)
 
     # YOLO ONNX settings
     yolo_model_path: str = "models/bowling_yolov5.onnx"
     yolo_input_size: tuple = (640, 640)
-    yolo_class_names: list = field(default_factory=lambda: ["bowling_pin"])
+    yolo_class_names: list = field(default_factory=lambda: ["bottle"])
 
     # DRP Binary settings
     drp_binary_path: str = "/opt/drp/bowling_detector"
@@ -81,13 +110,13 @@ class ArduinoConfig:
 @dataclass
 class NavigationConfig:
     """Navigation configuration."""
-    max_linear_speed: float = 0.3
-    max_angular_speed: float = 0.5
-    default_linear_speed: float = 0.15
-    default_angular_speed: float = 0.3
-    obstacle_distance_threshold: float = 0.4
-    obstacle_slowdown_distance: float = 0.8
-    target_reached_distance: float = 0.3
+    max_linear_speed: float = 0.10
+    max_angular_speed: float = 0.3
+    default_linear_speed: float = 0.07
+    default_angular_speed: float = 0.2
+    obstacle_distance_threshold: float = 0.20
+    obstacle_slowdown_distance: float = 0.4
+    target_reached_distance: float = 0.08
 
     # Search behavior
     search_enabled: bool = True
@@ -153,11 +182,18 @@ class Config:
     _initialized: bool = False
 
     def __new__(cls, *args, **kwargs):
+        """Ensure only one Config instance exists (singleton)."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
     def __init__(self, config_path: Optional[str] = None):
+        """Initialize configuration with optional YAML file path.
+
+        Args:
+            config_path: Path to a YAML config file.  If None and the
+                singleton is already initialized, this is a no-op.
+        """
         if Config._initialized and config_path is None:
             return
 
@@ -181,7 +217,16 @@ class Config:
 
     @classmethod
     def load(cls, config_path: str) -> 'Config':
-        """Load configuration from YAML file."""
+        """Load configuration from a YAML file and return the singleton.
+
+        Args:
+            config_path: Path (absolute or relative) to the YAML config file.
+                The loader searches several standard locations if the exact
+                path does not exist.
+
+        Returns:
+            The initialized Config singleton.
+        """
         instance = cls(config_path)
         instance._load_file(config_path)
         return instance
@@ -193,7 +238,15 @@ class Config:
         cls._initialized = False
 
     def _load_file(self, config_path: str) -> None:
-        """Load and parse YAML configuration file."""
+        """Load and parse YAML configuration file.
+
+        Searches multiple standard locations for the config file, parses
+        the YAML into typed dataclasses, then applies environment variable
+        overrides.
+
+        Args:
+            config_path: Requested config file path.
+        """
         path = Path(config_path)
 
         # Search for config file in common locations
@@ -225,18 +278,32 @@ class Config:
         self._apply_env_overrides()
 
     def _parse_config(self) -> None:
-        """Parse raw config into typed dataclasses."""
+        """Parse raw YAML dict into typed dataclass instances.
+
+        Each top-level YAML key (detection, camera, lidar, etc.) maps to a
+        corresponding dataclass attribute.  Missing keys fall back to the
+        dataclass defaults.
+        """
         # Detection
         if 'detection' in self._raw:
             d = self._raw['detection']
+            # Parse target profile (with fallback to old flat keys)
+            t = d.get('target', {})
+            target = TargetConfig(
+                class_name=t.get('class_name', d.get('target_class', 'bottle')),
+                display_name=t.get('display_name', 'Bottle'),
+                filter_classes=t.get('filter_classes', d.get('filter_classes', ['bottle'])),
+                real_object_height=t.get('real_object_height', 0.38),
+            )
             self.detection = DetectionConfig(
                 detector_type=d.get('detector_type', 'yolo_onnx'),
                 confidence_threshold=d.get('confidence_threshold', 0.5),
-                target_class=d.get('target_class', 'bowling_pin'),
+                target_class=target.class_name,
                 max_detection_rate=d.get('max_detection_rate', 10),
+                target=target,
                 yolo_model_path=d.get('yolo_onnx', {}).get('model_path', 'models/bowling_yolov5.onnx'),
                 yolo_input_size=tuple(d.get('yolo_onnx', {}).get('input_size', [640, 640])),
-                yolo_class_names=d.get('yolo_onnx', {}).get('class_names', ['bowling_pin']),
+                yolo_class_names=d.get('yolo_onnx', {}).get('class_names', ['bottle']),
                 drp_binary_path=d.get('drp_binary', {}).get('binary_path', '/opt/drp/bowling_detector'),
                 drp_input_method=d.get('drp_binary', {}).get('input_method', 'shared_memory'),
                 drp_input_path=d.get('drp_binary', {}).get('input_path', '/dev/shm/camera_frame'),
@@ -304,14 +371,15 @@ class Config:
                 smoothing_factor=n.get('smoothing_factor', 0.3),
             )
 
-        # Distance Estimation
+        # Distance Estimation (uses target height as default)
         if 'distance_estimation' in self._raw:
             de = self._raw['distance_estimation']
             bbox = de.get('bbox_height', {})
+            default_height = self.detection.target.real_object_height
             self.distance_estimation = DistanceEstimationConfig(
                 method=de.get('method', 'bbox_height'),
                 focal_length=bbox.get('focal_length', 500.0),
-                real_object_height=bbox.get('real_object_height', 0.38),
+                real_object_height=bbox.get('real_object_height', default_height),
                 reference_area=de.get('bbox_area', {}).get('reference_area', 10000),
             )
 
@@ -342,8 +410,18 @@ class Config:
             )
 
     def _apply_env_overrides(self) -> None:
-        """Apply environment variable overrides."""
+        """Apply environment variable overrides (V2N_* prefix).
+
+        Environment variables take highest precedence, overriding both
+        YAML values and defaults.  Supported variables:
+            V2N_TARGET_CLASS, V2N_DETECTOR_TYPE, V2N_DETECTION_CONFIDENCE,
+            V2N_YOLO_MODEL, V2N_DRP_BINARY, V2N_ARDUINO_PORT, V2N_LIDAR_PORT,
+            V2N_CAMERA_ID, V2N_LINEAR_SPEED, V2N_ANGULAR_SPEED, V2N_LOG_LEVEL.
+        """
         # Detection
+        if os.environ.get('V2N_TARGET_CLASS'):
+            self.detection.target.class_name = os.environ['V2N_TARGET_CLASS']
+            self.detection.target_class = self.detection.target.class_name
         if os.environ.get('V2N_DETECTOR_TYPE'):
             self.detection.detector_type = os.environ['V2N_DETECTOR_TYPE']
         if os.environ.get('V2N_DETECTION_CONFIDENCE'):
@@ -372,7 +450,16 @@ class Config:
             self.logging.level = os.environ['V2N_LOG_LEVEL']
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Get raw config value by dot-notation key."""
+        """Get a raw config value by dot-notation key.
+
+        Args:
+            key: Dot-separated path into the raw YAML dict,
+                e.g. ``"navigation.max_linear_speed"``.
+            default: Value returned when the key is missing.
+
+        Returns:
+            The value at the given path, or *default*.
+        """
         keys = key.split('.')
         value = self._raw
         for k in keys:
@@ -391,7 +478,11 @@ _config: Optional[Config] = None
 
 
 def get_config() -> Config:
-    """Get the global configuration instance."""
+    """Get the global configuration instance.
+
+    Returns a default-initialized Config if ``load_config()`` has not been
+    called yet.
+    """
     global _config
     if _config is None:
         _config = Config()
@@ -399,7 +490,14 @@ def get_config() -> Config:
 
 
 def load_config(config_path: str) -> Config:
-    """Load configuration from file and set as global."""
+    """Load configuration from a YAML file and set it as the global instance.
+
+    Args:
+        config_path: Path to the YAML configuration file.
+
+    Returns:
+        The loaded Config singleton.
+    """
     global _config
     _config = Config.load(config_path)
     return _config

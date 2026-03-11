@@ -177,6 +177,20 @@ VEL,vx,vy,wz
 | `READ` | Read 4 encoder values (returns 4 lines: FL, RL, RR, FR) |
 | `SYNC` | Synchronize communication |
 | `CALIB` | Start motor calibration (~15 seconds) |
+| `RESET` | Reset encoder counters to zero |
+
+### GUI Motor Calibration (via Settings → Tools tab)
+
+The Settings window provides buttons to send calibration commands via the `/arduino/cmd` ROS2 topic (`std_msgs/String`):
+
+| Button | Command Sent | Purpose |
+|--------|-------------|---------|
+| CALIBRATE | `CALIB` | Full motor calibration (~15s) |
+| SYNC | `SYNC` | Synchronize communication |
+| READ | `READ` | Read current encoder values |
+| RESET ENC | `RESET` | Reset encoder counters |
+
+This is the recommended way to calibrate motors — no terminal access needed.
 
 ### Firmware Responses
 
@@ -465,7 +479,7 @@ submap_publish_period_sec = 0.3  -- 3Hz map updates
 
 ### Why No Loop Closure?
 
-Loop closure (`optimize_every_n_nodes > 0`) runs a global optimizer that matches current scans against all previous submaps. On the V2N's ARM processor, this causes CPU spikes and latency. Since the bowling environment is typically small and the robot returns to start, drift is manageable without it.
+Loop closure (`optimize_every_n_nodes > 0`) runs a global optimizer that matches current scans against all previous submaps. On the V2N's ARM processor, this causes CPU spikes and latency. Since the bottle environment is typically small and the robot returns to start, drift is manageable without it.
 
 ### Tuning Tips
 

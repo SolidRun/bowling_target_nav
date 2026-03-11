@@ -178,8 +178,7 @@ void Display::show(cv::Mat& frame, const std::vector<Detection>& detections,
         /* Console mode: print detections */
         if (!detections.empty()) {
             for (const auto& det : detections) {
-                const char* name = (det.class_id < NUM_CLASSES) ?
-                    CLASS_NAMES[det.class_id] : "unknown";
+                const char* name = get_class_name(det.class_id);
                 printf("[%d] %s: %.1f%% at (%.0f,%.0f)-(%.0f,%.0f)\n",
                        m_frame_count, name, det.confidence * 100.0f,
                        det.x1, det.y1, det.x2, det.y2);
@@ -197,8 +196,7 @@ void Display::show(cv::Mat& frame, const std::vector<Detection>& detections,
             cv::rectangle(frame, cv::Point(x1, y1), cv::Point(x2, y2), color, BOX_LINE_SIZE);
 
             /* Label */
-            const char* name = (det.class_id < NUM_CLASSES) ?
-                CLASS_NAMES[det.class_id] : "unknown";
+            const char* name = get_class_name(det.class_id);
             char label[128];
             snprintf(label, sizeof(label), "%s %.0f%%", name, det.confidence * 100.0f);
 
@@ -233,8 +231,7 @@ void Display::show(cv::Mat& frame, const std::vector<Detection>& detections,
         /* Also print detections to console */
         if (!detections.empty()) {
             for (const auto& det : detections) {
-                const char* name = (det.class_id < NUM_CLASSES) ?
-                    CLASS_NAMES[det.class_id] : "unknown";
+                const char* name = get_class_name(det.class_id);
                 printf("[%d] %s: %.1f%% at (%.0f,%.0f)-(%.0f,%.0f)\n",
                        m_frame_count, name, det.confidence * 100.0f,
                        det.x1, det.y1, det.x2, det.y2);

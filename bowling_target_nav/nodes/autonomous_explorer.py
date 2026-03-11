@@ -3,7 +3,7 @@
 Autonomous Explorer Node
 ========================
 
-Scans for bowling targets, approaches and pushes them.
+Scans for targets, approaches and pushes them.
 
 State machine:
     SCAN_ROTATE -> Rotate 360° in place, looking for target with camera

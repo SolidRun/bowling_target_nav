@@ -23,20 +23,20 @@ class TestDetection:
     def test_detection_creation(self):
         """Test creating a Detection object."""
         det = Detection(
-            class_name="bowling_pin",
+            class_name="bottle",
             class_id=0,
             confidence=0.95,
             bbox=(100, 100, 200, 300)
         )
 
-        assert det.class_name == "bowling_pin"
+        assert det.class_name == "bottle"
         assert det.confidence == 0.95
         assert det.bbox == (100, 100, 200, 300)
 
     def test_detection_center(self):
         """Test center calculation."""
         det = Detection(
-            class_name="bowling_pin",
+            class_name="bottle",
             class_id=0,
             confidence=0.9,
             bbox=(100, 100, 200, 300)
@@ -47,7 +47,7 @@ class TestDetection:
     def test_detection_dimensions(self):
         """Test width and height properties."""
         det = Detection(
-            class_name="bowling_pin",
+            class_name="bottle",
             class_id=0,
             confidence=0.9,
             bbox=(100, 100, 200, 350)
@@ -59,7 +59,7 @@ class TestDetection:
     def test_detection_area(self):
         """Test area calculation."""
         det = Detection(
-            class_name="bowling_pin",
+            class_name="bottle",
             class_id=0,
             confidence=0.9,
             bbox=(0, 0, 100, 100)
@@ -70,7 +70,7 @@ class TestDetection:
     def test_normalize_center(self):
         """Test center normalization."""
         det = Detection(
-            class_name="bowling_pin",
+            class_name="bottle",
             class_id=0,
             confidence=0.9,
             bbox=(300, 220, 340, 260)  # Center at (320, 240)
@@ -96,8 +96,8 @@ class TestDetectionResult:
     def test_result_with_detections(self):
         """Test result with detections."""
         detections = [
-            Detection("bowling_pin", 0, 0.8, (100, 100, 200, 300)),
-            Detection("bowling_pin", 0, 0.95, (300, 100, 400, 300)),
+            Detection("bottle", 0, 0.8, (100, 100, 200, 300)),
+            Detection("bottle", 0, 0.95, (300, 100, 400, 300)),
         ]
         result = DetectionResult(detections=detections)
 
@@ -107,21 +107,21 @@ class TestDetectionResult:
     def test_filter_by_class(self):
         """Test filtering by class name."""
         detections = [
-            Detection("bowling_pin", 0, 0.9, (100, 100, 200, 300)),
+            Detection("bottle", 0, 0.9, (100, 100, 200, 300)),
             Detection("person", 1, 0.85, (300, 100, 400, 300)),
-            Detection("bowling_pin", 0, 0.8, (500, 100, 600, 300)),
+            Detection("bottle", 0, 0.8, (500, 100, 600, 300)),
         ]
         result = DetectionResult(detections=detections)
 
-        pins = result.filter_by_class("bowling_pin")
+        pins = result.filter_by_class("bottle")
         assert len(pins) == 2
 
     def test_filter_by_confidence(self):
         """Test filtering by confidence."""
         detections = [
-            Detection("bowling_pin", 0, 0.9, (100, 100, 200, 300)),
-            Detection("bowling_pin", 0, 0.6, (300, 100, 400, 300)),
-            Detection("bowling_pin", 0, 0.4, (500, 100, 600, 300)),
+            Detection("bottle", 0, 0.9, (100, 100, 200, 300)),
+            Detection("bottle", 0, 0.6, (300, 100, 400, 300)),
+            Detection("bottle", 0, 0.4, (500, 100, 600, 300)),
         ]
         result = DetectionResult(detections=detections)
 
@@ -219,7 +219,7 @@ class TestMockDetector:
         """Test detect_target convenience method."""
         detector = MockDetector(
             detection_mode="always",
-            target_class="bowling_pin"
+            target_class="bottle"
         )
         detector.initialize()
 
@@ -227,7 +227,7 @@ class TestMockDetector:
         detection = detector.detect_target(frame)
 
         assert detection is not None
-        assert detection.class_name == "bowling_pin"
+        assert detection.class_name == "bottle"
 
 
 class TestDetectorFactory:
@@ -295,10 +295,10 @@ class TestYoloOnnxDetector:
         from bowling_target_nav.detectors.yolo_onnx_detector import YoloOnnxDetector
 
         detector = YoloOnnxDetector(
-            class_names=["bowling_pin", "bottle"]
+            class_names=["bottle", "bottle"]
         )
 
-        assert "bowling_pin" in detector.supported_classes
+        assert "bottle" in detector.supported_classes
         assert "bottle" in detector.supported_classes
 
 

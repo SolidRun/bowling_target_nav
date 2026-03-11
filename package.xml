@@ -4,7 +4,7 @@
   <name>bowling_target_nav</name>
   <version>1.0.0</version>
   <description>
-    Vision-based target detection and autonomous navigation for bowling pin approach.
+    Vision-based target detection and autonomous navigation for bottle target approach.
     Modular design allows swapping detection backends (YOLO, custom binary, etc.)
   </description>
   <maintainer email="robot@rzv2n.local">RZ/V2N Robot</maintainer>

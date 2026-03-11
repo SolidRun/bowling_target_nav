@@ -6,10 +6,10 @@
 # Sets up EVERYTHING on a fresh RZ/V2N device:
 #   1. Verifies ROS2 environment
 #   2. Builds the ROS2 package
-#   3. Installs helper scripts (bowling_launcher, bowling_gui, remote_desktop)
+#   3. Installs helper scripts (bottle_launcher, bottle_gui, remote_desktop)
 #   4. Sets up WiFi Access Point (hostapd + udhcpd)
 #   5. Creates udev rules (touchscreen, rfkill)
-#   6. Creates all systemd services (robot, bowling-launcher, remote-desktop, wifi-ap)
+#   6. Creates all systemd services (robot, bottle-launcher, remote-desktop, wifi-ap)
 #   7. Enables all services for auto-start on boot
 #   8. Checks hardware
 #
@@ -240,12 +240,12 @@ fi
 # ═══════════════════════════════════════════════════════════════════════
 step "Installing helper scripts"
 
-# bowling_launcher.py - GTK desktop launcher with Start/Stop GUI button
+# bottle_launcher.py - GTK desktop launcher with Start/Stop GUI button
 cp "$SCRIPT_DIR/bowling_launcher.py" /root/bowling_launcher.py
 chmod +x /root/bowling_launcher.py
 ok "bowling_launcher.py -> /root/"
 
-# bowling_gui.sh - shell script that kills old processes and starts main_gui
+# bottle_gui.sh - shell script that kills old processes and starts main_gui
 cp "$SCRIPT_DIR/bowling_gui.sh" /root/bowling_gui.sh
 chmod +x /root/bowling_gui.sh
 ok "bowling_gui.sh -> /root/"
@@ -462,7 +462,7 @@ ok "wifi-ap.service (WiFi AP + DHCP)"
 # --- robot.service ---
 cat > /etc/systemd/system/robot.service << SVCEOF
 [Unit]
-Description=V2N Robot Auto-Start (ROS2 Bowling Target Nav)
+Description=V2N Robot Auto-Start (ROS2 Bottle Target Nav)
 After=network.target multi-user.target
 Wants=network.target
 
@@ -493,7 +493,7 @@ ok "robot.service (bringup + SLAM)"
 # MUST start after weston - needs Wayland display
 cat > /etc/systemd/system/bowling-launcher.service << 'SVCEOF'
 [Unit]
-Description=Bowling GUI Desktop Launcher
+Description=Bottle GUI Desktop Launcher
 After=weston.service
 Wants=weston.service
 
@@ -510,7 +510,7 @@ Environment=WAYLAND_DISPLAY=wayland-1
 [Install]
 WantedBy=graphical.target
 SVCEOF
-ok "bowling-launcher.service (GUI Start/Stop button)"
+ok "bottle-launcher.service (GUI Start/Stop button)"
 
 # --- remote-desktop.service ---
 # MUST start after weston to avoid stealing DRM master
@@ -601,13 +601,13 @@ else
     warn "robot failed to start. Check: journalctl -u robot"
 fi
 
-# bowling-launcher needs weston's Wayland display
+# bottle-launcher needs weston's Wayland display
 systemctl restart bowling-launcher
 sleep 2
 if systemctl is-active --quiet bowling-launcher; then
-    ok "bowling-launcher running (Start GUI button on screen)"
+    ok "bottle-launcher running (Start GUI button on screen)"
 else
-    warn "bowling-launcher failed. Check: journalctl -u bowling-launcher"
+    warn "bottle-launcher failed. Check: journalctl -u bowling-launcher"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -658,7 +658,7 @@ echo "    1. seatd.service     -> Seat/DRM master management"
 echo "    2. weston.service    -> Wayland compositor (DSI-1 rotate-180)"
 echo "    3. wifi-ap.service   -> WiFi AP starts (SSID: $WIFI_SSID)"
 echo "    4. robot.service     -> Bringup + SLAM mapping start"
-echo "    5. bowling-launcher  -> Start/Stop GUI button appears on screen"
+echo "    5. bottle-launcher   -> Start/Stop GUI button appears on screen"
 echo "    6. remote-desktop    -> Web remote at http://$AP_IP:$REMOTE_DESKTOP_PORT"
 echo ""
 echo "  Connect to robot:"
@@ -669,7 +669,7 @@ echo ""
 echo "  Service commands:"
 echo "    systemctl status robot bowling-launcher remote-desktop wifi-ap"
 echo "    journalctl -u robot -f           # Robot logs"
-echo "    journalctl -u bowling-launcher -f # Launcher logs"
+echo "    journalctl -u bottle-launcher -f  # Launcher logs"
 echo ""
 echo "  Check status anytime:"
 echo "    $SCRIPT_DIR/v2n_setup.sh --status"

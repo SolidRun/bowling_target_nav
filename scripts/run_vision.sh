@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run bowling target vision node with video display
+# Run bottle target vision node with video display
 
 # Setup display for V2N Wayland
 export XDG_RUNTIME_DIR=/run/user/996

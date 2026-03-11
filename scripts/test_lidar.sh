@@ -11,7 +11,7 @@ LIDAR_PORT=${1:-/dev/ttyUSB0}
 BAUDRATE=${2:-256000}
 
 echo "=========================================="
-echo "  RPLidar Test - Bowling Target Nav"
+echo "  RPLidar Test - Bottle Target Nav"
 echo "=========================================="
 echo ""
 

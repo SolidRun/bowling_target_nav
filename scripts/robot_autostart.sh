@@ -62,7 +62,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Start services (GUI is started separately via bowling-launcher.service)
+# Start services (GUI is started separately via bottle-launcher.service)
 echo ""
 echo "Starting robot services..."
 

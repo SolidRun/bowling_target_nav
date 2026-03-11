@@ -1,5 +1,5 @@
 [Unit]
-Description=V2N Robot Auto-Start (ROS2 Bowling Target Nav)
+Description=V2N Robot Auto-Start (ROS2 Bottle Target Nav)
 After=network.target multi-user.target
 Wants=network.target
 

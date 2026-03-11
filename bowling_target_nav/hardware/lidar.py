@@ -2,8 +2,20 @@
 LiDAR Sensor
 ============
 
-Abstract base class and implementations for LiDAR sensor.
-Supports real RPLidar communication and mock for testing.
+Abstract base class and implementations for 2D LiDAR scanning.
+
+Provides:
+  - LidarPoint: Single range measurement (angle, distance, quality)
+    with cartesian x/y properties.
+  - LidarScan: One full rotation of points with convenience methods for
+    min-distance, angle-range filtering, front-distance, and numpy/
+    cartesian conversion.
+  - LidarBase: Abstract interface (connect/disconnect/start_scanning/
+    stop_scanning/get_scan).
+  - LidarBridge: Real RPLidar driver (mm-to-meter conversion, range filter).
+  - MockLidar: Simulated scans with configurable obstacles and noise.
+  - create_lidar(): Factory function that selects real or mock based on
+    flags and optional config object.
 """
 
 import logging

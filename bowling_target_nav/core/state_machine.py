@@ -1,9 +1,17 @@
 """
-Robot State Machine
-===================
+Robot State Machine  --  UNUSED / LEGACY
+========================================
 
-Provides a clean state machine implementation for robot behavior control.
-Uses the State pattern for extensibility and testability.
+.. warning::
+    This module is **not imported** by the active codebase.  It is kept for
+    reference only.  The navigation behavior is now handled by
+    ``nav/navigator.py`` (direct navigation loop) and the GUI-side state
+    facades in ``state/``.
+
+Provides a State-pattern state machine for robot behavior control.
+The design was superseded during the transition to the multiprocess
+architecture where navigation runs in its own process with a simpler
+control loop rather than a formal state machine.
 """
 
 import logging

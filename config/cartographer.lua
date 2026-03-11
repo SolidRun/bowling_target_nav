@@ -1,5 +1,16 @@
 -- Cartographer Configuration for RZ/V2N
 -- 2D LiDAR + wheel odometry SLAM
+--
+-- TF tree:  map -> odom -> base_link -> laser
+--   cartographer publishes: map -> odom (localization correction)
+--   odometry_node publishes: odom -> base_link (wheel odometry)
+--   robot_state_publisher:   base_link -> laser (from URDF)
+--
+-- IMPORTANT: Global SLAM (loop closure) is disabled to prevent
+-- abseil mutex deadlock on aarch64 (V2N board). This means:
+--   - Only local submap optimization occurs
+--   - Map drift accumulates over long sessions
+--   - Restart mapping for fresh maps if drift is noticeable
 
 include "map_builder.lua"
 include "trajectory_builder.lua"
@@ -7,6 +18,10 @@ include "trajectory_builder.lua"
 options = {
   map_builder = MAP_BUILDER,
   trajectory_builder = TRAJECTORY_BUILDER,
+  -- TF tree: map -> odom -> base_link -> laser
+  -- cartographer publishes: map -> odom
+  -- odometry_node publishes: odom -> base_link
+  -- robot_state_publisher: base_link -> laser (from URDF)
   map_frame = "map",
   tracking_frame = "base_link",
   published_frame = "odom",
@@ -39,14 +54,21 @@ TRAJECTORY_BUILDER_2D.max_range = 8.0
 TRAJECTORY_BUILDER_2D.missing_data_ray_length = 5.0
 TRAJECTORY_BUILDER_2D.use_imu_data = false
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
-TRAJECTORY_BUILDER_2D.motion_filter.max_angle_radians = math.rad(0.5)
-TRAJECTORY_BUILDER_2D.motion_filter.max_distance_meters = 0.1
+TRAJECTORY_BUILDER_2D.motion_filter.max_angle_radians = math.rad(0.1)
+TRAJECTORY_BUILDER_2D.motion_filter.max_distance_meters = 0.02
 
--- Submaps config
-TRAJECTORY_BUILDER_2D.submaps.num_range_data = 90
+-- Submaps config (lower = faster map updates)
+TRAJECTORY_BUILDER_2D.submaps.num_range_data = 35
 TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 
--- Disable global SLAM (loop closure) to reduce CPU and avoid deadlock
+-- Disable global SLAM completely to avoid mutex deadlock on V2N
+-- (optimize_every_n_nodes = 0 disables optimizer, but constraint builder
+--  still runs and causes deadlock with main thread on aarch64)
 POSE_GRAPH.optimize_every_n_nodes = 0
+POSE_GRAPH.constraint_builder.sampling_ratio = 0.0
+POSE_GRAPH.global_sampling_ratio = 0.0
+POSE_GRAPH.constraint_builder.min_score = 0.99
+POSE_GRAPH.constraint_builder.global_localization_min_score = 0.99
+POSE_GRAPH.max_num_final_iterations = 1
 
 return options

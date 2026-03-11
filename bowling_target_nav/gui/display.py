@@ -1,6 +1,14 @@
-"""Display setup - auto-detect Wayland/X11 for V2N embedded board.
+"""Display backend setup -- auto-detect Wayland/X11 for V2N embedded board.
 
-MUST be called before importing gi.repository.Gtk.
+The V2N RZ/V2N board runs Weston (Wayland compositor) by default. On
+development machines, X11 is typically used instead. This module detects
+which compositor is running and sets the appropriate GDK_BACKEND and
+WAYLAND_DISPLAY / XDG_RUNTIME_DIR environment variables so GTK3 connects
+to the correct display server.
+
+MUST be called before importing gi.repository.Gtk (i.e., before Gtk.init()).
+
+Also disables OpenCV OpenCL to prevent contention with DRP-AI on V2N.
 """
 
 import os
@@ -8,7 +16,13 @@ import subprocess
 
 
 def setup_display():
-    """Auto-detect and configure display for V2N (Weston/Wayland/framebuffer)."""
+    """Auto-detect and configure display for V2N (Weston/Wayland/framebuffer).
+
+    Detection priority:
+      1. Weston running -> set GDK_BACKEND=wayland, locate socket
+      2. DISPLAY env set -> set GDK_BACKEND=x11
+      3. Neither -> try Wayland defaults as last resort
+    """
     weston_running = False
     try:
         result = subprocess.run(['pgrep', '-x', 'weston'], capture_output=True, timeout=2)

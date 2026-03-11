@@ -35,6 +35,7 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <vector>
 
 #include "define.h"
 #include "drpai_inference.h"
@@ -79,9 +80,48 @@ struct AppConfig {
 
     /* Thread polling interval (microseconds) — used by multi-threaded camera pipeline */
     int   wait_time = WAIT_TIME;
+
+    /* Runtime class names (loaded from labels.txt or config.ini, overrides CLASS_NAMES) */
+    std::vector<std::string> class_names;
+    std::string display_label;  /* Short label for overlay (e.g., "Pin", "Bottle") */
 };
 
 static AppConfig g_cfg;
+
+/* Get class name by ID — uses runtime names if loaded, else compile-time fallback */
+const char* get_class_name(int class_id) {
+    if (!g_cfg.class_names.empty() && class_id >= 0 &&
+        class_id < (int)g_cfg.class_names.size())
+        return g_cfg.class_names[class_id].c_str();
+    if (class_id >= 0 && class_id < NUM_CLASSES)
+        return CLASS_NAMES[class_id];
+    return "unknown";
+}
+
+/* Get display label (short name for overlay, e.g., "Pin", "Bottle") */
+static const char* get_display_label() {
+    if (!g_cfg.display_label.empty())
+        return g_cfg.display_label.c_str();
+    /* Default: first class name */
+    return get_class_name(0);
+}
+
+/* Load class names from labels.txt (one name per line) */
+static int load_labels(const std::string& path) {
+    FILE* f = fopen(path.c_str(), "r");
+    if (!f) return 0;
+    g_cfg.class_names.clear();
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        /* Trim trailing whitespace/newline */
+        char* end = line + strlen(line) - 1;
+        while (end >= line && (*end == '\n' || *end == '\r' || *end == ' ')) *end-- = '\0';
+        if (line[0] != '\0' && line[0] != '#')
+            g_cfg.class_names.emplace_back(line);
+    }
+    fclose(f);
+    return (int)g_cfg.class_names.size();
+}
 
 static void signal_handler(int signum) {
     (void)signum;
@@ -172,6 +212,20 @@ static int load_config(const std::string& path) {
         else if (strcmp(key, "drpai_freq") == 0)       { g_cfg.drpai_freq = atoi(val); count++; }
         /* ── Threading ── */
         else if (strcmp(key, "wait_time") == 0)        { g_cfg.wait_time = atoi(val); count++; }
+        /* ── Class names ── */
+        else if (strcmp(key, "display_label") == 0)    { g_cfg.display_label = val; count++; }
+        else if (strcmp(key, "class_names") == 0) {
+            g_cfg.class_names.clear();
+            char* tok = strtok(val, ",");
+            while (tok) {
+                while (*tok == ' ') tok++;
+                char* e = tok + strlen(tok) - 1;
+                while (e > tok && *e == ' ') *e-- = '\0';
+                if (*tok) g_cfg.class_names.emplace_back(tok);
+                tok = strtok(NULL, ",");
+            }
+            count++;
+        }
     }
     fclose(f);
     return count;
@@ -393,7 +447,7 @@ static void write_json(const std::vector<Detection>& dets, float infer_ms) {
                "\"confidence\":%.4f,\"class_id\":%d,\"class_name\":\"%s\"}",
                (int)d.x1, (int)d.y1, (int)d.x2, (int)d.y2,
                d.confidence, d.class_id,
-               (d.class_id < NUM_CLASSES) ? CLASS_NAMES[d.class_id] : "unknown");
+               get_class_name(d.class_id));
     }
     printf("],\"inference_ms\":%.1f}\n", infer_ms);
     fflush(stdout);
@@ -453,8 +507,8 @@ static int run_pipe_mode(DRPAIInference& drpai) {
 static void estimate_distance(float x1, float y1, float x2, float y2,
                                int frame_w, int frame_h,
                                float& out_distance, float& out_angle) {
-    /* Simple pinhole model — calibrated for bowling pin (~38cm tall).
-     *   At 1m on 640x480 cam with 60deg HFOV, pin bbox ≈ 200px tall. */
+    /* Simple pinhole model — calibrated for target object (~38cm tall).
+     *   At 1m on 640x480 cam with 60deg HFOV, target bbox ≈ 200px tall. */
     const float ref_box_height = 200.0f;
     const float ref_distance = 1.0f;
     const float hfov_rad = 60.0f * (float)M_PI / 180.0f;
@@ -470,10 +524,48 @@ static void estimate_distance(float x1, float y1, float x2, float y2,
 static void draw_stream_overlays(cv::Mat& frame,
                                   const std::vector<Detection>& dets,
                                   float infer_ms) {
-    if (dets.empty()) return;
-
     int fw = frame.cols;
     int fh = frame.rows;
+
+    /* ── Always-on status bar (top-left) ── */
+    /* Semi-transparent background bar */
+    cv::Mat bar_roi = frame(cv::Rect(0, 0, fw, 32));
+    bar_roi *= 0.4;
+
+    /* DRP-AI badge */
+    cv::putText(frame, "DRP-AI", cv::Point(8, 22),
+                cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 220, 0), 2);
+
+    /* Inference time */
+    char ai_text[64];
+    snprintf(ai_text, sizeof(ai_text), "%.0fms", infer_ms);
+    cv::putText(frame, ai_text, cv::Point(100, 22),
+                cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(0, 255, 255), 1);
+
+    /* Target label */
+    char target_text[64];
+    snprintf(target_text, sizeof(target_text), "Target: %s", get_display_label());
+    cv::putText(frame, target_text, cv::Point(170, 22),
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+
+    /* Detection count */
+    char det_text[64];
+    snprintf(det_text, sizeof(det_text), "Det: %d", (int)dets.size());
+    cv::putText(frame, det_text, cv::Point(fw - 80, 22),
+                cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                dets.empty() ? cv::Scalar(100, 100, 100) : cv::Scalar(0, 255, 0), 1);
+
+    if (dets.empty()) {
+        /* No detections — show "No <target> detected" at bottom */
+        char no_det[128];
+        snprintf(no_det, sizeof(no_det), "No %s detected", get_display_label());
+        int baseline = 0;
+        cv::Size tsz = cv::getTextSize(no_det, cv::FONT_HERSHEY_SIMPLEX, 0.6, 1, &baseline);
+        cv::putText(frame, no_det, cv::Point((fw - tsz.width) / 2, fh - 15),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 200), 1);
+        return;
+    }
+
     cv::Scalar box_color(0, 255, 0);         /* green boxes (BGR) */
     cv::Scalar xhair_color(102, 255, 0);     /* green crosshair (BGR) */
     cv::Scalar clip_color(0, 77, 255);       /* orange CLIPPED (BGR) */
@@ -493,13 +585,19 @@ static void draw_stream_overlays(cv::Mat& frame,
 
         /* Confidence label */
         char label[64];
-        snprintf(label, sizeof(label), "Pin %.0f%%", d.confidence * 100.0f);
+        snprintf(label, sizeof(label), "%s %.0f%%", get_display_label(), d.confidence * 100.0f);
         cv::putText(frame, label, cv::Point(bx1, by1 - 5),
                     cv::FONT_HERSHEY_SIMPLEX, 0.5, box_color, 1);
 
-        /* Distance for ranking */
+        /* Distance + angle label below box */
         float dist, angle;
         estimate_distance(d.x1, d.y1, d.x2, d.y2, fw, fh, dist, angle);
+        char dist_label[64];
+        snprintf(dist_label, sizeof(dist_label), "%.2fm %.0fdeg",
+                 dist, angle * 180.0f / (float)M_PI);
+        cv::putText(frame, dist_label, cv::Point(bx1, by2 + 15),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.4, box_color, 1);
+
         if (dist < best_dist) {
             best_dist = dist;
             best_idx = (int)i;
@@ -522,24 +620,11 @@ static void draw_stream_overlays(cv::Mat& frame,
     cv::line(frame, cv::Point(cx, cy - r - 6), cv::Point(cx, cy - r + 6), xhair_color, 2);
     cv::line(frame, cv::Point(cx, cy + r - 6), cv::Point(cx, cy + r + 6), xhair_color, 2);
 
-    /* Distance + angle label */
-    char info[64];
-    snprintf(info, sizeof(info), "%.2fm  %.0fdeg",
-             best_distance, best_angle * 180.0f / (float)M_PI);
-    cv::putText(frame, info, cv::Point(cx + r + 8, cy - 4),
-                cv::FONT_HERSHEY_SIMPLEX, 0.45, xhair_color, 1);
-
-    /* CLIPPED indicator (distance estimate unreliable when bbox touches frame edge) */
+    /* CLIPPED indicator */
     if ((int)best.y1 <= 5 || (int)best.y2 >= fh - 5) {
         cv::putText(frame, "CLIPPED", cv::Point(cx + r + 8, cy + 10),
                     cv::FONT_HERSHEY_SIMPLEX, 0.4, clip_color, 1);
     }
-
-    /* Inference time overlay */
-    char fps_text[64];
-    snprintf(fps_text, sizeof(fps_text), "AI: %.0f ms", infer_ms);
-    cv::putText(frame, fps_text, cv::Point(10, 25),
-                cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 255), 1);
 }
 
 /* Extended JSON output — includes distance and angle for each detection */
@@ -556,7 +641,7 @@ static void write_json_ext(const std::vector<Detection>& dets, float infer_ms,
                "\"distance\":%.4f,\"angle\":%.4f}",
                (int)d.x1, (int)d.y1, (int)d.x2, (int)d.y2,
                d.confidence, d.class_id,
-               (d.class_id < NUM_CLASSES) ? CLASS_NAMES[d.class_id] : "unknown",
+               get_class_name(d.class_id),
                dist, angle);
     }
     printf("],\"inference_ms\":%.1f}\n", infer_ms);
@@ -679,9 +764,7 @@ static int run_stream_mode(DRPAIInference& drpai) {
             /* Draw detection overlays on frame before writing to shm */
             {
                 std::lock_guard<std::mutex> lock(overlay_mutex);
-                if (!overlay_dets.empty()) {
-                    draw_stream_overlays(frame, overlay_dets, overlay_ms);
-                }
+                draw_stream_overlays(frame, overlay_dets, overlay_ms);
             }
 
             /* Write overlaid frame to shared memory */
@@ -1018,6 +1101,13 @@ int main(int argc, char* argv[]) {
     /* 1. Load config.ini — overrides compile-time defaults */
     int cfg_count = load_config("config.ini");
 
+    /* 1b. Load labels.txt (if not already set by config.ini class_names) */
+    if (g_cfg.class_names.empty()) {
+        int n = load_labels("labels.txt");
+        if (n > 0)
+            fprintf(stderr, "  Loaded %d class name(s) from labels.txt\n", n);
+    }
+
     /* 2. Parse CLI arguments — overrides config.ini */
     bool pipe_mode = false;
     bool stream_mode = false;
@@ -1058,7 +1148,7 @@ int main(int argc, char* argv[]) {
     fprintf(stderr, "Model:      %s/%s (%s)\n", g_cfg.model_dir.c_str(), MODEL_DIR, MODEL_NAME);
     fprintf(stderr, "Classes:    %d", NUM_CLASSES);
     for (int i = 0; i < NUM_CLASSES && i < 10; i++)
-        fprintf(stderr, "%s%s", (i == 0) ? " (" : ", ", CLASS_NAMES[i]);
+        fprintf(stderr, "%s%s", (i == 0) ? " (" : ", ", get_class_name(i));
     if (NUM_CLASSES > 10) fprintf(stderr, ", ...");
     if (NUM_CLASSES > 0)  fprintf(stderr, ")");
     fprintf(stderr, "\n");

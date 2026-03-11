@@ -15,10 +15,8 @@ Usage:
 import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 
@@ -30,21 +28,6 @@ def generate_launch_description():
         'arduino_port',
         default_value='/dev/ttyACM0',
         description='Arduino serial port'
-    )
-
-    show_map_arg = DeclareLaunchArgument(
-        'show_map',
-        default_value='false',
-        description='Show map on screen using OpenCV'
-    )
-
-    # Map viewer node (OpenCV-based, for V2N screen)
-    map_viewer_node = Node(
-        package='bowling_target_nav',
-        executable='map_viewer_node',
-        name='map_viewer_node',
-        output='screen',
-        condition=IfCondition(LaunchConfiguration('show_map'))
     )
 
     # Include bringup launch (uses rplidar_ros package's A1 launch)
@@ -69,8 +52,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         arduino_port_arg,
-        show_map_arg,
         bringup_launch,
         mapping_launch,
-        map_viewer_node,
     ])

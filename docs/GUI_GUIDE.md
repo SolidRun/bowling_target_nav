@@ -31,11 +31,11 @@ The GUI is a fullscreen GTK3 application running on Wayland/Weston. It displays 
 │  │      SLAM Map          │  │     Camera Feed    │NAVIGATING││ │
 │  │                        │  │                    └──────────┘│ │
 │  │   ● Robot (green)      │  │   ┌────┐                      │ │
-│  │   · Laser (red)        │  │   │ pin│ 0.45m  12°           │ │
+│  │   · Laser (red)        │  │   │ btl│ 0.45m  12°           │ │
 │  │   ◇ Target (magenta)   │  │   └────┘                      │ │
 │  │   ─ Nav path (magenta) │  │                                │ │
 │  │                        │  │              v=0.12 m/s  w=5°/s│ │
-│  │  Robot: (1.2, 0.5) 45° │  │  Detection: Pins: 0.45m, 12° │ │
+│  │  Robot: (1.2, 0.5) 45° │  │  Detection: Bottles: 0.45m, 12° │ │
 │  └────────────────────────┘  └────────────────────────────────┘ │
 │                                                                  │
 │  [GO TO TARGET]  [STOP]  ● NAVIGATING 0.45m      [SETTINGS][QUIT]│
@@ -78,8 +78,10 @@ The window is divided into three vertical sections:
 | Free space | Dark gray (50,50,50) | Navigable areas |
 | Occupied | Orange (0,200,255 BGR) | Walls and obstacles |
 | Unknown | Very dark (30,30,30) | Unexplored areas |
-| Robot | Green circle + arrow | Current position and heading |
-| Laser points | Red dots (2px) | LiDAR scan in real-time |
+| Robot | Green circle + white arrow | Current position and heading |
+| Laser (match) | Green dots | Laser hits occupied cell (SLAM correct) |
+| Laser (mismatch) | Red dots | Laser hits free cell (SLAM drift/stale map) |
+| Laser (unmapped) | Orange dots | Laser hits unknown area |
 | Nav target | Magenta diamond | Target position in map frame |
 | Nav path | Magenta line | Line from robot to target |
 | Grid | Gray lines | Drawn when zoom > 15px/meter |
@@ -94,11 +96,20 @@ The window is divided into three vertical sections:
 6. LiDAR points are transformed from robot frame to map frame and plotted
 7. Navigation target (if any) is drawn as a diamond with a line from robot
 
-### Info Label (Bottom)
-```
-Robot: (1.23, 0.45) 67°
-```
-Shows the robot's position in the map frame and heading in degrees.
+### Diagnostic Overlay (Bottom of Map Panel)
+
+Three lines of diagnostic information are displayed below the map:
+
+1. **Robot pose + map info**: `Robot: (1.23, 0.45) 67° | Map: 200x200 updates:42`
+2. **Topic rates + TF age**: `Scan: 5.5Hz (360pts) | Map: 3.3Hz | TF age: 0.1s` — Color-coded: green (<0.5s), yellow (<2s), red (>2s)
+3. **Scan-map consistency**: `Map match: 85% (120 ok / 15 miss / 10 unmapped of 145)` — Shows how well the laser scan matches the SLAM map
+
+### Map Rotation
+
+The map can be rotated via the Map tab in Settings (-180° to +180°). Rotation is applied to:
+- The map image (via OpenCV affine transform)
+- All overlay elements (robot marker, laser points, nav target)
+- Robot heading arrow (adjusted for rotation angle)
 
 ---
 
@@ -144,7 +155,7 @@ These are Cairo RGB values from `camera_panel.py`, rendered as semi-transparent 
 
 ### Info Label (Bottom)
 ```
-Detection: Pins: 0.45m, 12.3°
+Detection: Bottles: 0.45m, 12.3°
 ```
 
 ---
@@ -153,7 +164,7 @@ Detection: Pins: 0.45m, 12.3°
 
 | Button | Size | Style | Keyboard | Action |
 |--------|------|-------|----------|--------|
-| **GO TO TARGET** | 200x60px | Green (suggested-action) | `G` | Start navigating to closest pin |
+| **GO TO TARGET** | 200x60px | Green (suggested-action) | `G` | Start navigating to closest bottle |
 | **STOP** | 200x60px | Red (destructive-action) | `Space` or `S` | Emergency stop |
 | **SETTINGS** | 120x60px | Blue (settings-btn) | — | Open settings window |
 | **QUIT** | 100x60px | Orange (quit-btn) | `Q` or `ESC` | Quit application |
@@ -212,7 +223,7 @@ All keyboard events are captured by the main window's `key-press-event` handler.
 
 ## 8. Settings Window
 
-A 540x620px dialog window with 5 tabs for real-time parameter tuning. All changes take effect **immediately** — no save/apply button needed.
+A 620x740px dialog window with **8 tabs** for real-time parameter tuning. All changes take effect **immediately** and are **auto-saved** to disk after 2 seconds of inactivity (debounced). Settings persist across restarts via `~/.config/bowling_target_nav/calibration.json`.
 
 ### Tab 1: Navigation
 
@@ -222,31 +233,45 @@ Controls the main navigation behavior.
 |-----------|-------|---------|------|--------|
 | Linear Speed | 0.05–0.30 | 0.15 | m/s | Forward speed toward target |
 | Min Speed | 0.05–0.20 | 0.10 | m/s | Motor dead zone threshold |
-| Angular Speed | 0.1–1.0 | 0.5 | rad/s | Maximum rotation speed |
-| Approach Distance | 0.05–0.50 | 0.15 | m | Distance to declare "arrived" |
+| Angular Speed | 0.1–1.0 | 0.4 | rad/s | Maximum rotation speed |
+| Approach Distance | 0.0–0.50 | 0.0 | m | Distance to declare "arrived" |
 | Lost Timeout | 1.0–10.0 | 3.0 | s | Seconds before switching to blind/search |
-| Search Timeout | 10.0–60.0 | 30.0 | s | Safety timeout (search also stops after 360° scan) |
-| Search Angular Speed | 0.1–1.0 | 0.4 | rad/s | Rotation speed when searching |
 
-### Tab 2: Blind Approach
+### Tab 2: Search
 
-Controls dead-reckoning behavior when camera loses sight of pin.
+Controls the 360° search scan and spiral search behavior.
 
 | Parameter | Range | Default | Unit | Effect |
 |-----------|-------|---------|------|--------|
-| Entry Distance | 0.30–1.50 | 0.80 | m | Switch to blind approach below this distance |
-| Approach Speed | 0.05–0.20 | 0.10 | m/s | Slow forward speed during blind approach |
-| Timeout | 3.0–15.0 | 8.0 | s | Abort blind approach after this |
-| LiDAR Stop | 0.05–0.30 | 0.12 | m | Stop if LiDAR detects something this close |
-| Arrival Margin | 0.05–0.25 | 0.10 | m | Declare arrived within this distance |
+| Search Timeout | 10.0–60.0 | 30.0 | s | Safety timeout for search scan |
+| Search Angular Speed | 0.1–1.0 | 0.35 | rad/s | Rotation speed when searching |
+| Spiral Search Enabled | Toggle | On | — | Enable/disable spiral search after 360° scan |
+| Spiral Initial Radius | 0.1–1.0 | 0.3 | m | Starting radius of spiral |
+| Spiral Max Radius | 0.5–5.0 | 2.0 | m | Maximum spiral radius |
+| Spiral Growth Rate | 0.05–0.5 | 0.15 | m/rev | How fast the spiral grows |
+| Spiral Linear Speed | 0.05–0.20 | 0.10 | m/s | Forward speed during spiral |
+| Spiral Angular Speed | 0.1–0.5 | 0.25 | rad/s | Rotation speed during spiral |
+| Spiral Timeout | 10.0–120.0 | 45.0 | s | Maximum spiral search duration |
 
-### Tab 3: Detection
+### Tab 3: Blind Approach
+
+Controls dead-reckoning behavior when camera loses sight of bottle.
+
+| Parameter | Range | Default | Unit | Effect |
+|-----------|-------|---------|------|--------|
+| Entry Distance | 0.10–1.50 | 0.37 | m | Switch to blind approach below this distance |
+| Approach Speed | 0.05–0.20 | 0.12 | m/s | Slow forward speed during blind approach |
+| Timeout | 3.0–15.0 | 10.0 | s | Abort blind approach after this |
+| LiDAR Stop | 0.02–0.30 | 0.06 | m | Stop if LiDAR detects something this close |
+| Arrival Margin | 0.02–0.25 | 0.05 | m | Declare arrived within this distance |
+
+### Tab 4: Detection
 
 Controls AI detection sensitivity and timing.
 
 | Parameter | Range | Default | Unit | Effect |
 |-----------|-------|---------|------|--------|
-| Confidence Threshold | 0.10–0.90 | 0.35 | — | Minimum YOLO confidence to accept detection |
+| Confidence Threshold | 0.10–0.90 | 0.50 | — | Minimum YOLO confidence to accept detection |
 | Detection Interval | 0.5–5.0 | 2.0 | s | Minimum time between YOLO inference runs (DRP-AI) |
 | Detection Expiry | 0.5–5.0 | 1.5 | s | Discard detections older than this |
 
@@ -255,27 +280,55 @@ Controls AI detection sensitivity and timing.
 - Higher detection interval → less CPU load but slower reaction
 - Higher expiry → targets "remembered" longer, but may navigate to stale positions
 
-### Tab 4: Obstacle
+### Tab 5: Obstacle
 
 Controls LiDAR-based obstacle avoidance.
 
 | Parameter | Range | Default | Unit | Effect |
 |-----------|-------|---------|------|--------|
-| Stop Distance | 0.10–0.50 | 0.25 | m | Emergency stop when obstacle this close |
-| Slowdown Distance | 0.20–1.00 | 0.50 | m | Start slowing down at this distance |
+| Stop Distance | 0.10–0.50 | 0.20 | m | Emergency stop when obstacle this close |
+| Slowdown Distance | 0.20–1.00 | 0.40 | m | Start slowing down at this distance |
 | Robot Half Width | 0.05–0.30 | 0.15 | m | Width of front corridor for obstacle check |
 
-### Tab 5: Calibration
+### Tab 6: Map
 
-Tools for calibrating distance estimation and testing motors.
+Controls the SLAM map display panel appearance.
+
+| Parameter | Range | Default | Unit | Effect |
+|-----------|-------|---------|------|--------|
+| Map Rotation | -180–180 | 0.0 | degrees | Rotate the entire map view |
+| Robot Size | 4–30 | 12 | px | Radius of robot marker circle |
+| Arrow Length | 8–50 | 20 | px | Length of heading arrow |
+| Laser Point Size | 0–4 | 1 | px | Size of LiDAR dots (0=1px, 1=3px) |
+| Show Grid | Toggle | On | — | Show/hide meter grid lines |
+| Show Laser | Toggle | On | — | Show/hide LiDAR scan overlay |
+| Show Nav Target | Toggle | On | — | Show/hide navigation target diamond |
+
+Includes a **RESET MAP DEFAULTS** button to restore all map display parameters.
+
+### Tab 7: Setup
+
+Tools for calibrating distance estimation, testing motors, and configuring sensors.
 
 #### Distance Calibration
 
-1. Place a bowling pin at a **known distance** from the camera
+1. Place a bottle at a **known distance** from the camera
 2. Enter the distance in the spin button (0.3–3.0 m)
 3. Press **CALIBRATE**
 4. The system captures the current bbox height and stores it as reference
 5. Result shows: `"Calibrated: 142px at 1.0m"`
+
+#### Sensor Position
+
+Configure camera and LiDAR positions relative to `base_link`:
+- Camera X/Y/Z offset (meters)
+- LiDAR X/Y/Z offset (meters)
+- Distance reference point selector (center, front, camera, lidar)
+
+#### Robot Dimensions
+
+Configure physical robot dimensions:
+- Length, Width, Height (meters)
 
 #### Motor Test
 
@@ -295,6 +348,36 @@ Speed is configurable via the speed spin button (0.05–0.30 m/s).
 #### Reset Odometry
 
 Publishes an `Empty` message to `/reset_odom` topic, resetting wheel encoder integration to (0, 0, 0).
+
+### Tab 8: Tools
+
+#### Arduino Motor Calibration
+
+Send calibration commands directly to the Arduino motor controller via the `/arduino/cmd` topic:
+
+| Button | Command | Description |
+|--------|---------|-------------|
+| CALIBRATE | `CALIB` | Run full motor calibration (~15s) |
+| SYNC | `SYNC` | Synchronize communication |
+| READ | `READ` | Read current encoder values |
+| RESET ENC | `RESET` | Reset encoder counters to zero |
+
+Status feedback is shown below the buttons with color-coded messages.
+
+#### Reset All Defaults
+
+Resets **all** parameters to factory defaults:
+- Navigation parameters (21 params)
+- Map display parameters (7 params)
+- Detection/obstacle parameters
+
+### Auto-Save Behavior
+
+All parameter changes are automatically saved to disk:
+1. User adjusts a slider or toggle
+2. A 2-second debounce timer starts (resets on each new change)
+3. After 2 seconds of no changes, `save_calibration()` writes to `~/.config/bowling_target_nav/calibration.json`
+4. On next startup, all saved parameters are restored with type-safe coercion
 
 ---
 
@@ -371,14 +454,21 @@ MainGUI (Gtk.Window, fullscreen)
         ├── Button "SETTINGS" (settings-btn)
         └── Button "QUIT" (quit-btn)
 
-SettingsWindow (Gtk.Window, 540x620)
-└── Notebook (5 tabs)
-    ├── Tab "Navigation" → VBox of sliders
-    ├── Tab "Blind Approach" → VBox of sliders
-    ├── Tab "Detection" → VBox of sliders
-    ├── Tab "Obstacle" → VBox of sliders
-    └── Tab "Calibration"
-        ├── Distance Calibration section
-        ├── Motor Test section (2x3 button grid)
-        └── Odometry Reset section
+SettingsWindow (Gtk.Window, 620x740)
+└── Notebook (8 tabs)
+    ├── Tab "Navigation" → VBox of sliders (speed, approach, lost timeout)
+    ├── Tab "Search" → VBox of sliders (search + spiral params)
+    ├── Tab "Blind" → VBox of sliders (blind approach params)
+    ├── Tab "Detection" → VBox of sliders (confidence, interval, expiry)
+    ├── Tab "Obstacle" → VBox of sliders (stop/slowdown distance)
+    ├── Tab "Map" → Rotation, robot marker, laser, grid toggles
+    ├── Tab "Setup"
+    │   ├── Distance Calibration section
+    │   ├── Sensor Position section (camera/LiDAR offsets)
+    │   ├── Robot Dimensions section
+    │   ├── Motor Test section (2x3 button grid)
+    │   └── Odometry Reset section
+    └── Tab "Tools"
+        ├── Arduino Motor Calibration (CALIB/SYNC/READ/RESET)
+        └── Reset All Defaults button
 ```

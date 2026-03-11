@@ -1,9 +1,29 @@
-"""Mecanum holonomic navigation with obstacle avoidance and blind approach."""
+"""Mecanum holonomic navigation with obstacle avoidance and blind approach.
+
+This module implements the main navigation pipeline for a 4-wheel mecanum
+robot.  It combines:
+
+- **Visual servoing** -- steer toward a camera-detected target.
+- **LiDAR+Vision distance fusion** -- use calibrated vision distance by
+  default, fall back to LiDAR when the bounding box is clipped.
+- **VFH obstacle avoidance** -- Vector Field Histogram gap-finding lets the
+  robot strafe around obstacles while keeping the camera on the target.
+- **Blind approach** -- dead-reckon to the last known map-frame target
+  position when the target drops out of view at close range.
+- **Tiered search** -- 360-degree rotation scan (Tier 1) followed by an
+  expanding Archimedean spiral (Tier 2) when the target is lost.
+- **Temporal arrival confirmation** -- requires multiple sensor signals
+  to agree for a sustained period before declaring arrival.
+
+All velocity commands are published through ``_publish_cmd`` which sanitizes
+NaN/Inf and enforces speed caps.
+"""
 
 import math
 import time
 
-from geometry_msgs.msg import Twist
+import rclpy
+from geometry_msgs.msg import Twist, PointStamped
 
 
 def _clamp_twist(cmd):
@@ -52,17 +72,18 @@ class Navigator:
         self._nav_client = nav_client
         self._logger = logger
 
-        # Navigation parameters (tunable via SettingsWindow)
-        self.approach_distance = 0.15
-        self.linear_speed = 0.25
-        self.min_linear_speed = 0.18
-        self.angular_speed = 0.5
-        self.obstacle_distance = 0.25
-        self.obstacle_slowdown_distance = 0.5
-        self.robot_half_width = 0.18
-        self.search_angular_speed = 0.4
-        self.lost_timeout = 3.0
-        self.search_timeout = 30.0
+        # Navigation parameters (tunable via SettingsWindow, persisted in detection_store)
+        np = state.detection.get_nav_params()
+        self.approach_distance = np['approach_distance']
+        self.linear_speed = np['linear_speed']
+        self.min_linear_speed = np['min_linear_speed']
+        self.angular_speed = np['angular_speed']
+        self.obstacle_distance = np['obstacle_distance']
+        self.obstacle_slowdown_distance = np['obstacle_slowdown_distance']
+        self.robot_half_width = state.detection.get_robot_half_width()
+        self.search_angular_speed = np['search_angular_speed']
+        self.lost_timeout = np['lost_timeout']
+        self.search_timeout = np['search_timeout']
 
         # Blind approach parameters
         self.blind_approach_active = False
@@ -70,11 +91,11 @@ class Navigator:
         self.blind_approach_start_pose = (0.0, 0.0, 0.0)
         self.blind_approach_target_map = (0.0, 0.0)
         self.blind_approach_target_distance = 0.0
-        self.blind_approach_entry_distance = 0.80
-        self.blind_approach_speed = 0.18
-        self.blind_approach_timeout = 8.0
-        self.blind_approach_lidar_stop = 0.12
-        self.blind_approach_arrival_margin = 0.10
+        self.blind_approach_entry_distance = np['blind_approach_entry_distance']
+        self.blind_approach_speed = np['blind_approach_speed']
+        self.blind_approach_timeout = np['blind_approach_timeout']
+        self.blind_approach_lidar_stop = np['blind_approach_lidar_stop']
+        self.blind_approach_arrival_margin = np['blind_approach_arrival_margin']
 
         # Tracking
         self.last_target_angle = 0.0
@@ -88,16 +109,47 @@ class Navigator:
         self._avoid_min_commit = 1.5  # seconds to commit before allowing switch
         self._avoid_clear_count = 0   # consecutive obstacle-free ticks
 
-        # 360° search scan state
+        # 360° search scan state (Tier 1)
         self._search_start_yaw = 0.0
         self._search_last_yaw = 0.0
         self._search_total_rotated = 0.0
         self._search_initialized = False
 
+        # Spiral search state (Tier 2: after 360° scan fails)
+        self._spiral_active = False
+        self._spiral_start_time = 0.0
+        self._spiral_start_x = 0.0
+        self._spiral_start_y = 0.0
+        self._spiral_angle = 0.0
+        self._spiral_radius = 0.0
+        self._spiral_last_time = 0.0
+
+        # Spiral search tunable parameters
+        self.spiral_search_enabled = np['spiral_search_enabled']
+        self.spiral_initial_radius = np['spiral_initial_radius']
+        self.spiral_max_radius = np['spiral_max_radius']
+        self.spiral_growth_rate = np['spiral_growth_rate']
+        self.spiral_linear_speed = np['spiral_linear_speed']
+        self.spiral_angular_speed = np['spiral_angular_speed']
+        self.spiral_timeout = np['spiral_timeout']
+
         # Arrival confirmation (temporal filter)
         self._arrival_first_seen = 0.0   # timestamp when first "close" reading
         self._arrival_confirm_time = 0.3  # seconds of sustained closeness required
         self._arrival_hysteresis = 1.5    # reset timer when distance > threshold * this
+
+        # Close approach distance plateau detector
+        self._close_approach_min_dist = float('inf')  # best distance seen
+        self._close_approach_plateau_start = 0.0       # when distance stopped decreasing
+
+    def _base_to_laser_angle(self, base_angle):
+        """Convert base_link angle to laser frame angle for raw scan lookup.
+
+        The raw scan's angles are in laser frame. When lidar_yaw != 0,
+        base_link angles don't map directly to laser scan indices.
+        """
+        lidar_yaw = math.radians(self._state.detection.get_lidar_yaw())
+        return base_angle - lidar_yaw
 
     def _publish_cmd(self, cmd):
         """Sanitize and publish a Twist command. All publishes go through here."""
@@ -107,13 +159,33 @@ class Navigator:
         self._cmd_vel_pub.publish(cmd)
         self._state.nav.set_current_cmd_vel(cmd.linear.x, cmd.linear.y, cmd.angular.z)
 
+    # RPLiDAR A1 minimum detection range (~15cm). Below this distance
+    # the sensor returns no data, so LiDAR-based signals are unavailable.
+    LIDAR_MIN_RANGE = 0.15
+
     def _check_arrival(self, distance, angle, bbox_clipped=False):
         """Multi-signal arrival check with temporal confirmation.
 
-        Combines fused distance, LiDAR frontal corridor, and LiDAR at target
-        angle. Requires sustained close readings for 0.3s to confirm arrival.
+        Combines up to four independent proximity signals:
+            1. Fused distance (vision or LiDAR) below threshold.
+            2. LiDAR frontal corridor -- any obstacle directly ahead.
+            3. LiDAR at the target angle -- narrow cone toward the target.
+            4. Bbox clipped -- target fills camera vertically (very close).
 
-        Returns True if arrived, False otherwise.
+        When the approach threshold is below the LiDAR minimum range
+        (~0.15 m for RPLiDAR A1), LiDAR signals are excluded and only
+        vision + bbox_clipped are used.  Otherwise 2-of-4 agreement is
+        required.  The timer must be sustained for ``_arrival_confirm_time``
+        seconds before arrival is declared.
+
+        Args:
+            distance: Fused distance to the target [m].
+            angle: Target bearing in base_link frame [rad].
+            bbox_clipped: True if the detection bounding box is clipped by
+                the image edge (vision distance may be unreliable).
+
+        Returns:
+            True if arrival is confirmed, False otherwise.
         """
         now = time.time()
         threshold = self.approach_distance
@@ -121,36 +193,41 @@ class Navigator:
         # Signal 1: fused distance below threshold
         dist_close = distance <= threshold
 
-        # Signal 2: LiDAR frontal corridor (any obstacle directly ahead)
-        min_front, _, _ = self.check_obstacles()
-        lidar_front_close = min_front < threshold
+        # Signal 4: bbox clipped = target fills camera (strong close signal)
+        bbox_close = bbox_clipped
 
-        # Signal 3: LiDAR at target angle (narrow cone toward the pin)
-        lidar_at_target = self._state.sensors.get_lidar_distance_at_angle(angle)
-        lidar_target_close = lidar_at_target < threshold
+        # When threshold is below LiDAR min range, LiDAR signals are useless
+        # (sensor physically can't detect at this distance).  Use vision only.
+        if threshold < self.LIDAR_MIN_RANGE:
+            # Accept arrival on vision distance OR bbox clipped
+            is_close = dist_close or bbox_close
+            min_front = float('inf')
+            lidar_at_target = float('inf')
+        else:
+            # Signal 2: LiDAR frontal corridor
+            min_front, _, _ = self.check_obstacles()
+            lidar_front_close = min_front < threshold
 
-        # Emergency override: something very close in front + evidence of target
-        if min_front < self.blind_approach_lidar_stop and (dist_close or bbox_clipped):
-            self._logger.info(
-                f"ARRIVED (emergency): front={min_front:.3f}m, "
-                f"dist={distance:.2f}m, clipped={bbox_clipped}")
-            return True
+            # Signal 3: LiDAR at target angle
+            lidar_at_target = self._state.sensors.get_lidar_distance_at_angle(
+                self._base_to_laser_angle(angle))
+            lidar_target_close = lidar_at_target < threshold
 
-        # Require at least 2 of 3 signals to agree (prevents false arrival
-        # from a single noisy LiDAR reading)
-        close_count = sum([dist_close, lidar_front_close, lidar_target_close])
-        is_close = close_count >= 2
+            # Require at least 2 of 4 signals
+            close_count = sum([dist_close, lidar_front_close,
+                               lidar_target_close, bbox_close])
+            is_close = close_count >= 2
 
         if is_close:
             if self._arrival_first_seen == 0.0:
                 self._arrival_first_seen = now
                 self._logger.info(
                     f"Arrival timer started: dist={distance:.2f}m, "
-                    f"front={min_front:.2f}m, lidar_target={lidar_at_target:.2f}m")
+                    f"front={min_front:.2f}m, clipped={bbox_clipped}")
             elif now - self._arrival_first_seen >= self._arrival_confirm_time:
                 self._logger.info(
                     f"ARRIVED (confirmed {self._arrival_confirm_time:.1f}s): "
-                    f"dist={distance:.2f}m, front={min_front:.2f}m")
+                    f"dist={distance:.2f}m, clipped={bbox_clipped}")
                 return True
             # Timer running but not yet confirmed
             return False
@@ -171,23 +248,38 @@ class Navigator:
     def navigate_to_target(self, target):
         """Navigate toward a detected target with LiDAR+Vision distance fusion."""
         vision_distance = target.get('distance', 1.0)
-        angle = target.get('angle', 0.0)
-        angle = -angle  # Camera convention (+=right) to ROS (+=left)
+        cam_angle = target.get('angle', 0.0)
+        cam_angle = -cam_angle  # Camera convention (+=right) to ROS (+=left)
+
+        # Convert camera-frame angle to robot-frame (base_link) angle
+        camera_yaw_rad = math.radians(self._state.detection.get_camera_yaw())
+        angle = cam_angle + camera_yaw_rad  # angle is now in base_link frame
         self.last_target_angle = angle
         bbox_clipped = target.get('bbox_clipped', False)
 
+        # Sensor offset compensation: convert distances to active reference point
+        # (configurable in Setup tab: center, front, camera, or lidar)
+        cam_offset = self._state.detection.get_sensor_offset('camera')
+        lidar_offset = self._state.detection.get_sensor_offset('lidar')
+
+        # Vision distance is from camera → apply offset to reference point
+        vision_distance_ref = vision_distance + cam_offset
+
         # Distance fusion: prefer calibrated vision, use LiDAR only when
-        # vision is unreliable (bbox clipped = pin too close for accurate bbox)
+        # vision is unreliable (bbox clipped = target too close for accurate bbox)
         if bbox_clipped:
-            lidar_distance = self._state.sensors.get_lidar_distance_at_angle(angle)
+            # Convert base_link angle to laser frame for raw scan lookup
+            lidar_distance = self._state.sensors.get_lidar_distance_at_angle(
+                self._base_to_laser_angle(angle))
             if lidar_distance < float('inf'):
-                distance = lidar_distance
+                # LiDAR distance from laser frame → apply offset to reference point
+                distance = lidar_distance + lidar_offset
                 source = "lidar"
             else:
-                distance = vision_distance
+                distance = vision_distance_ref
                 source = "vision"
         else:
-            distance = vision_distance
+            distance = vision_distance_ref
             source = "vision"
 
         # Reject invalid distances
@@ -207,24 +299,65 @@ class Navigator:
                 f"{math.degrees(angle):.1f}deg{clip_tag}")
             self._last_nav_log = time.time()
 
-        # Store map-frame target for GUI overlay
+        # Store map-frame target for GUI overlay using TF2
+        # Transforms detection point: camera_link -> map (via base_link)
         try:
-            robot_x, robot_y, robot_theta = self._state.sensors.get_robot_pose()
-            cos_t = math.cos(robot_theta)
-            sin_t = math.sin(robot_theta)
-            map_tx = robot_x + target_x * cos_t - target_y * sin_t
-            map_ty = robot_y + target_x * sin_t + target_y * cos_t
-            self._state.nav.set_nav_target_map(map_tx, map_ty)
+            pt = PointStamped()
+            pt.header.stamp = rclpy.time.Time().to_msg()
+            pt.header.frame_id = 'camera_link'
+            # Detection in camera_link frame (x=forward, y=left)
+            # Use cam_angle (camera-frame) — TF2 handles camera_yaw via TF chain
+            pt.point.x = vision_distance * math.cos(cam_angle)
+            pt.point.y = vision_distance * math.sin(cam_angle)
+            pt.point.z = 0.0
+            # TF2 handles camera position, yaw, and robot pose automatically
+            from tf2_geometry_msgs import do_transform_point
+            tf = self._tf_buffer.lookup_transform('map', 'camera_link',
+                                                   rclpy.time.Time())
+            map_pt = do_transform_point(pt, tf)
+            self._state.nav.set_nav_target_map(map_pt.point.x, map_pt.point.y)
         except Exception:
-            pass
+            # Fallback: manual computation if TF not available
+            try:
+                robot_x, robot_y, robot_theta = self._state.sensors.get_robot_pose()
+                cam_pos = self._state.detection.get_camera_pos()
+                # Detection in camera frame
+                det_x = vision_distance * math.cos(cam_angle)
+                det_y = vision_distance * math.sin(cam_angle)
+                # Rotate from camera frame to body frame by camera_yaw
+                cos_cy = math.cos(camera_yaw_rad)
+                sin_cy = math.sin(camera_yaw_rad)
+                body_x = cam_pos['x'] + det_x * cos_cy - det_y * sin_cy
+                body_y = cam_pos['y'] + det_x * sin_cy + det_y * cos_cy
+                cos_t = math.cos(robot_theta)
+                sin_t = math.sin(robot_theta)
+                map_tx = robot_x + body_x * cos_t - body_y * sin_t
+                map_ty = robot_y + body_x * sin_t + body_y * cos_t
+                self._state.nav.set_nav_target_map(map_tx, map_ty)
+            except Exception:
+                pass
 
         # --- Arrival check (multi-signal with temporal confirmation) ---
         if self._check_arrival(distance, angle, bbox_clipped):
             self._arrive()
             return
 
+        # --- Close approach: target visible and within obstacle avoidance zone ---
+        # When the target is close, LiDAR sees it as an obstacle. Instead of
+        # triggering VFH avoidance (which backs up or strafes away), drive
+        # directly toward it at slow speed.  No plateau detector — just keep
+        # driving until arrival check fires or blind approach takes over.
+        if distance < self.obstacle_slowdown_distance:
+            cmd = Twist()
+            speed = self.min_linear_speed
+            cmd.linear.x = speed * math.cos(angle)
+            cmd.linear.y = speed * math.sin(angle)
+            cmd.angular.z = max(-0.15, min(0.15, angle * 0.3))
+            self._publish_cmd(cmd)
+            return
+
         # --- Bbox clipped + vision-only: vision distance is unreliable ---
-        # Clipped bbox means pin is close but measured height is too small,
+        # Clipped bbox means target is close but measured height is too small,
         # so vision overestimates distance. Enter blind approach rather than
         # navigating with wrong data.
         if bbox_clipped and source == "vision" and distance < self.blind_approach_entry_distance:
@@ -244,14 +377,21 @@ class Navigator:
             self._publish_cmd(cmd)
             return
 
-        self.direct_navigate(target_x, target_y, distance)
+        self.direct_navigate(target_x, target_y, distance, target_visible=True)
 
-    def direct_navigate(self, target_x, target_y, distance):
+    def direct_navigate(self, target_x, target_y, distance, target_visible=False):
         """Mecanum holonomic navigation with VFH obstacle avoidance.
 
-        Uses Vector Field Histogram (VFH) gap-finding to steer around obstacles
-        instead of simple left/right strafing. Commits to a direction to prevent
-        oscillation.
+        Uses Vector Field Histogram (VFH) gap-finding to steer around obstacles.
+        When *target_visible* is True, keeps the camera pointed at the target
+        while the body strafes through gaps (LiDAR-gated visual servoing).
+
+        Args:
+            target_x: Target X position in robot (base_link) frame [m].
+            target_y: Target Y position in robot (base_link) frame [m].
+            distance: Euclidean distance to the target [m].
+            target_visible: If True, fuse angular control to keep the camera
+                aimed at the target during obstacle avoidance.
         """
         angle = math.atan2(target_y, target_x)
         cmd = Twist()
@@ -260,15 +400,30 @@ class Navigator:
         min_front, left_free, right_free = self.check_obstacles()
         self._state.nav.set_obstacle(min_front < self.obstacle_distance, min_front)
 
+        # When target is visible and the closest obstacle is roughly in the
+        # target direction, the obstacle IS the target (bottle). Skip VFH
+        # avoidance and drive straight at it (close approach).
+        if target_visible and min_front < self.obstacle_distance:
+            lidar_at_target = self._state.sensors.get_lidar_distance_at_angle(
+                self._base_to_laser_angle(angle))
+            # If LiDAR at target angle is close, obstacle = target → approach
+            if lidar_at_target < self.obstacle_slowdown_distance:
+                speed = self.min_linear_speed
+                cmd.linear.x = speed * math.cos(angle)
+                cmd.linear.y = speed * math.sin(angle)
+                cmd.angular.z = max(-0.15, min(0.15, angle * 0.3))
+                self._publish_cmd(cmd)
+                return
+
         if min_front < self.obstacle_distance:
             # --- OBSTACLE: VFH avoidance ---
-            if min_front < self.approach_distance:
-                # Emergency: too close
-                if self._stuck_start == 0.0:
-                    self._stuck_start = now
-                elif now - self._stuck_start > 3.0:
-                    cmd.linear.x = -self.linear_speed * 0.3
-                    self._stuck_start = 0.0
+            if min_front < self.LIDAR_MIN_RANGE:
+                # Emergency: too close — back up immediately + strafe to clear
+                cmd.linear.x = -self.linear_speed * 0.4
+                if left_free:
+                    cmd.linear.y = self.min_linear_speed
+                elif right_free:
+                    cmd.linear.y = -self.min_linear_speed
             else:
                 self._stuck_start = 0.0
                 gap_angle = self._find_best_gap(angle)
@@ -277,37 +432,50 @@ class Navigator:
                     # Commit to avoidance direction (prevents oscillation)
                     gap_side = 1 if gap_angle > 0 else -1
                     if self._avoid_direction == 0:
-                        # First entry: commit
                         self._avoid_direction = gap_side
                         self._avoid_start_time = now
                     elif now - self._avoid_start_time > self._avoid_min_commit:
-                        # Commitment expired: allow switching
                         self._avoid_direction = gap_side
 
-                    # If committed direction still has a gap, prefer it
-                    # Otherwise follow best gap regardless
                     if self._avoid_direction != gap_side:
-                        # Check if committed side has any valid gap
                         committed_gap = self._find_committed_gap(angle)
                         if committed_gap is not None:
                             gap_angle = committed_gap
 
-                    # Drive through the gap
+                    # Drive through the gap using mecanum strafing
                     speed = self.linear_speed * 0.6
                     cmd.linear.x = speed * math.cos(gap_angle)
                     cmd.linear.y = speed * math.sin(gap_angle)
-                    cmd.angular.z = max(-self.angular_speed * 0.3,
-                                        min(self.angular_speed * 0.3,
-                                            gap_angle * 0.3))
+
+                    if target_visible:
+                        # FUSED: keep camera on target while body strafes
+                        target_ang = self.last_target_angle
+                        cmd.angular.z = max(-self.angular_speed * 0.4,
+                                            min(self.angular_speed * 0.4,
+                                                target_ang * 0.5))
+                    else:
+                        # No target: rotate toward gap (original behavior)
+                        cmd.angular.z = max(-self.angular_speed * 0.3,
+                                            min(self.angular_speed * 0.3,
+                                                gap_angle * 0.3))
                 else:
-                    # No gap: back up
+                    # No gap: back up (with stuck timeout)
                     cmd.linear.x = -self.linear_speed * 0.3
                     self._avoid_direction = 0
+                    if self._stuck_start == 0.0:
+                        self._stuck_start = now
+                    elif now - self._stuck_start > 3.0:
+                        # Stuck backing up for 3s with no gap — stop
+                        self._logger.warn("VFH: stuck backing up >3s, stopping")
+                        self.stop_robot()
+                        return
 
             if now - self._last_obs_log > 1.0:
+                fused = " [FUSED]" if target_visible else ""
                 self._logger.warn(
                     f"OBSTACLE at {min_front:.2f}m! "
-                    f"avoid={'L' if self._avoid_direction > 0 else 'R' if self._avoid_direction < 0 else '-'}")
+                    f"avoid={'L' if self._avoid_direction > 0 else 'R' if self._avoid_direction < 0 else '-'}"
+                    f"{fused}")
                 self._last_obs_log = now
         else:
             # --- CLEAR PATH ---
@@ -343,10 +511,28 @@ class Navigator:
                 cmd.linear.x *= scale_up
                 cmd.linear.y *= scale_up
 
+        # Side obstacle protection: don't strafe into walls
+        if not left_free and cmd.linear.y > 0:
+            cmd.linear.y = 0.0
+        if not right_free and cmd.linear.y < 0:
+            cmd.linear.y = 0.0
+
         self._publish_cmd(cmd)
 
     def _find_committed_gap(self, target_angle):
-        """Find the best gap on the committed avoidance side."""
+        """Find the best gap restricted to the committed avoidance side.
+
+        Same algorithm as ``_find_best_gap`` but only considers gaps on
+        the side determined by ``_avoid_direction`` (left or right).
+        This prevents oscillation when the robot has already committed
+        to a particular avoidance direction.
+
+        Args:
+            target_angle: Desired travel direction in robot frame [rad].
+
+        Returns:
+            Gap angle [rad] on the committed side, or None.
+        """
         points, _, _ = self._state.sensors.get_laser()
         if len(points) == 0:
             return None
@@ -396,7 +582,16 @@ class Navigator:
         return best_angle
 
     def enter_blind_approach(self):
-        """Enter blind approach mode: dead-reckon to last known pin position."""
+        """Enter blind approach mode: dead-reckon to last known target position.
+
+        Converts the last base_link-frame target to map coordinates using
+        the current odometry pose, then stores it as the blind approach goal.
+
+        Returns:
+            True if blind approach was successfully entered, False if the
+            robot pose is stale (default 0,0,0) or no navigation target
+            is available.
+        """
         robot_x, robot_y, robot_theta = self._state.sensors.get_robot_pose()
 
         # Reject if pose looks like default (0,0,0) - likely stale/unavailable
@@ -427,7 +622,18 @@ class Navigator:
         return True
 
     def blind_approach_step(self):
-        """Execute one tick of blind approach dead-reckoning."""
+        """Execute one tick of blind approach dead-reckoning.
+
+        Computes the remaining distance and heading error to the stored
+        map-frame target, then drives holonomically toward it.  Exits on
+        any of these conditions:
+            - Arrived (remaining distance within margin).
+            - Timeout exceeded.
+            - LiDAR obstacle within stop distance (declared ARRIVED if
+              close to target, otherwise aborts to search).
+            - Heading diverged more than 45 degrees.
+            - Robot pose is stale (0,0,0).
+        """
         robot_x, robot_y, robot_theta = self._state.sensors.get_robot_pose()
 
         # Reject stale pose: if still at default, abort
@@ -465,14 +671,28 @@ class Navigator:
             self._state.nav.start_search()
             return
 
-        # Exit: LiDAR obstacle
+        # Exit: LiDAR obstacle — only declare ARRIVED if remaining distance is also small
+        # Use max of configured threshold and LiDAR min range (sensor can't see closer)
         min_front, left_free, right_free = self.check_obstacles()
-        if min_front < self.blind_approach_lidar_stop:
-            self._logger.info(f"BLIND_APPROACH: LiDAR stop at {min_front:.3f}m")
-            self.stop_robot()
-            self.blind_approach_active = False
-            self._state.nav.set_nav_state("ARRIVED")
-            return
+        lidar_stop = max(self.blind_approach_lidar_stop, self.LIDAR_MIN_RANGE)
+        if min_front < lidar_stop:
+            if remaining < self.blind_approach_arrival_margin * 4:
+                self._logger.info(
+                    f"BLIND_APPROACH: LiDAR stop at {min_front:.3f}m, "
+                    f"remaining={remaining:.3f}m -> ARRIVED")
+                self.stop_robot()
+                self.blind_approach_active = False
+                self._state.nav.set_nav_state("ARRIVED")
+                return
+            else:
+                # LiDAR obstacle but far from target — likely a wall, abort to search
+                self._logger.warn(
+                    f"BLIND_APPROACH: LiDAR obstacle at {min_front:.3f}m but "
+                    f"remaining={remaining:.2f}m -> search")
+                self.stop_robot()
+                self.blind_approach_active = False
+                self._state.nav.start_search()
+                return
 
         # Exit: heading diverged
         if abs(heading_error) > math.radians(45):
@@ -532,40 +752,171 @@ class Navigator:
             self._logger.info("360° search scan complete - target not found")
             return True  # Search complete, target not found
 
-        # Determine rotation direction (toward last known target angle)
+        # Fixed rotation direction (toward last known target angle)
+        # Never reverse — reversing causes oscillation with nearby obstacles
         direction = 1.0 if self.last_target_angle >= 0 else -1.0
-
-        # Obstacle avoidance during search
-        min_front, left_free, right_free = self.check_obstacles()
-        if min_front < self.obstacle_distance:
-            if direction > 0 and not left_free:
-                direction = -1.0
-            elif direction < 0 and not right_free:
-                direction = 1.0
 
         cmd = Twist()
         cmd.angular.z = self.search_angular_speed * direction
+
+        # Potential field: repulsive force from ALL nearby obstacles (360°)
+        rep_x, rep_y = self._compute_repulsion(self.obstacle_distance + 0.10)
+        rep_mag = math.sqrt(rep_x * rep_x + rep_y * rep_y)
+        if rep_mag > 0.01:
+            # Normalize and drive at min_linear_speed away from obstacles
+            cmd.linear.x = self.min_linear_speed * (rep_x / rep_mag)
+            cmd.linear.y = self.min_linear_speed * (rep_y / rep_mag)
+
+        self._publish_cmd(cmd)
+        return False  # Still searching
+
+    # ------------------------------------------------------------------
+    # Spiral search (Tier 2: expanding spiral after 360° scan fails)
+    # ------------------------------------------------------------------
+
+    def start_spiral_search(self):
+        """Initialize Tier 2 expanding spiral search from current position."""
+        rx, ry, rt = self._state.sensors.get_robot_pose()
+        self._spiral_active = True
+        self._spiral_start_time = time.time()
+        self._spiral_start_x = rx
+        self._spiral_start_y = ry
+        self._spiral_angle = rt  # Start heading in current direction
+        self._spiral_radius = self.spiral_initial_radius
+        self._spiral_last_time = time.time()
+        self._state.nav.set_nav_state("SPIRAL_SEARCH")
+        self._logger.info(
+            f"Spiral search started at ({rx:.2f}, {ry:.2f}), "
+            f"r={self.spiral_initial_radius:.2f}m")
+
+    def spiral_search_step(self):
+        """Execute one tick of expanding Archimedean spiral search (Tier 2).
+
+        The robot follows a spiral path centered on its position when the
+        search started, with the radius growing linearly per revolution.
+        A sinusoidal angular oscillation sweeps the camera for wider
+        detection coverage.  Obstacle avoidance (VFH gap-finding) is active
+        during the spiral.
+
+        Returns:
+            True when the search is exhausted (timeout or max radius
+            reached), False while the spiral is still active.
+        """
+        if not self._spiral_active:
+            return True
+
+        now = time.time()
+        elapsed = now - self._spiral_start_time
+
+        if elapsed > self.spiral_timeout:
+            self._logger.warn(f"Spiral search timeout after {elapsed:.1f}s")
+            self.stop_robot()
+            return True
+
+        if self._spiral_radius > self.spiral_max_radius:
+            self._logger.warn(
+                f"Spiral search max radius {self.spiral_max_radius:.1f}m reached")
+            self.stop_robot()
+            return True
+
+        rx, ry, rt = self._state.sensors.get_robot_pose()
+
+        # Advance spiral: angular rate = linear_speed / radius
+        dt = min(now - self._spiral_last_time, 0.2)  # clamp to prevent jumps
+        self._spiral_last_time = now
+        if self._spiral_radius > 0.05:
+            angular_rate = self.spiral_linear_speed / self._spiral_radius
+        else:
+            angular_rate = 2.0
+        self._spiral_angle += angular_rate * dt
+
+        # Archimedean spiral: radius grows linearly with angle
+        self._spiral_radius = (self.spiral_initial_radius +
+                               self.spiral_growth_rate *
+                               self._spiral_angle / (2 * math.pi))
+
+        # Target point on spiral (map frame, centered on start)
+        tx = (self._spiral_start_x +
+              self._spiral_radius * math.cos(self._spiral_angle))
+        ty = (self._spiral_start_y +
+              self._spiral_radius * math.sin(self._spiral_angle))
+
+        # Convert to robot-frame displacement
+        dx, dy = tx - rx, ty - ry
+        cos_r, sin_r = math.cos(-rt), math.sin(-rt)
+        local_x = dx * cos_r - dy * sin_r
+        local_y = dx * sin_r + dy * cos_r
+
+        # Obstacle avoidance
+        min_front, left_free, right_free = self.check_obstacles()
+        cmd = Twist()
+
+        if min_front < self.obstacle_distance:
+            move_angle = math.atan2(local_y, local_x)
+            gap = self._find_best_gap(move_angle)
+            if gap is not None:
+                speed = self.spiral_linear_speed * 0.5
+                cmd.linear.x = speed * math.cos(gap)
+                cmd.linear.y = speed * math.sin(gap)
+            else:
+                cmd.linear.x = -self.spiral_linear_speed * 0.3
+        else:
+            dist = math.sqrt(local_x ** 2 + local_y ** 2)
+            if dist > 0.02:
+                move_angle = math.atan2(local_y, local_x)
+                cmd.linear.x = self.spiral_linear_speed * math.cos(move_angle)
+                cmd.linear.y = self.spiral_linear_speed * math.sin(move_angle)
+            else:
+                cmd.linear.x = self.spiral_linear_speed * 0.5
+
+        # Side obstacle protection
+        if not left_free and cmd.linear.y > 0:
+            cmd.linear.y = 0.0
+        if not right_free and cmd.linear.y < 0:
+            cmd.linear.y = 0.0
+
+        # Camera sweep: sinusoidal oscillation for ~±17° coverage
+        sweep_phase = elapsed * 0.8
+        cmd.angular.z = self.spiral_angular_speed * math.sin(sweep_phase)
+
+        # Enforce minimum speed (motor dead zone)
+        total_speed = math.sqrt(cmd.linear.x ** 2 + cmd.linear.y ** 2)
+        if total_speed > 0 and total_speed < self.min_linear_speed:
+            scale = self.min_linear_speed / total_speed
+            cmd.linear.x *= scale
+            cmd.linear.y *= scale
+
         self._publish_cmd(cmd)
         return False  # Still searching
 
     def stop_robot(self):
         """Stop all robot motion."""
         cmd = Twist()
-        self._cmd_vel_pub.publish(cmd)
-        self._state.nav.set_current_cmd_vel(0.0, 0.0, 0.0)
+        self._publish_cmd(cmd)
         self._stuck_start = 0.0
         self._arrival_first_seen = 0.0
         self._avoid_direction = 0
         self._avoid_clear_count = 0
         self._search_initialized = False
+        self._spiral_active = False
+        self._close_approach_min_dist = float('inf')
+        self._close_approach_plateau_start = 0.0
 
     def _find_best_gap(self, target_angle):
         """VFH-lite: find the best open direction toward the target.
 
-        Builds a polar histogram from LiDAR, finds gaps wide enough for the
-        robot body, and returns the gap direction closest to target_angle.
+        Builds a polar histogram (front 180 deg, 36 bins of 5 deg each) from
+        LiDAR points.  Each bin records the closest obstacle distance.  A gap
+        is a contiguous set of bins wide enough to fit the robot body
+        (``robot_half_width`` + margin).  The gap whose center is closest to
+        *target_angle* is selected.
 
-        Returns steering angle in robot frame, or None if no gap found.
+        Args:
+            target_angle: Desired travel direction in robot frame [rad].
+
+        Returns:
+            Steering angle in robot frame [rad], or None if no passable gap
+            exists in the front hemisphere.
         """
         points, _, laser_time = self._state.sensors.get_laser()
         if len(points) == 0:
@@ -613,6 +964,33 @@ class Navigator:
 
         return best_angle
 
+    def _compute_repulsion(self, influence_dist):
+        """Potential field: compute repulsive vector from ALL nearby LiDAR points (360°).
+
+        Returns (rx, ry) in robot frame — the direction to escape obstacles.
+        Magnitude indicates urgency. Returns (0, 0) if no nearby obstacles.
+        """
+        points, _, laser_time = self._state.sensors.get_laser()
+        if len(points) == 0:
+            return 0.0, 0.0
+
+        rx, ry = 0.0, 0.0
+        inv_inf2 = 1.0 / (influence_dist * influence_dist)
+
+        for x, y in points:
+            if not (math.isfinite(x) and math.isfinite(y)):
+                continue
+            d2 = x * x + y * y
+            dist = math.sqrt(d2)
+            if dist < 0.03 or dist > influence_dist:
+                continue
+            # Repulsive force ∝ (1/d² - 1/d_inf²), direction = away from obstacle
+            force = (1.0 / d2) - inv_inf2
+            rx -= (x / dist) * force
+            ry -= (y / dist) * force
+
+        return rx, ry
+
     def check_obstacles(self):
         """Check LiDAR for obstacles. Returns (min_front_dist, left_free, right_free).
 
@@ -622,7 +1000,10 @@ class Navigator:
         points, _, laser_time = self._state.sensors.get_laser()
 
         # Fail-safe: stale or missing LiDAR data → assume obstacle everywhere
-        if len(points) == 0 or (laser_time > 0 and time.time() - laser_time > 0.5):
+        # Use 2.0s threshold: RPLiDAR A1 runs at 5-10Hz, plus IPC sync adds
+        # latency.  0.5s was too tight and falsely triggered during normal
+        # operation, causing the robot to stop at 0.78m.
+        if len(points) == 0 or (laser_time > 0 and time.time() - laser_time > 2.0):
             if time.time() - self._last_obs_log > 2.0:
                 self._logger.warn("LiDAR data stale or empty - fail-safe stop")
                 self._last_obs_log = time.time()
@@ -639,13 +1020,14 @@ class Navigator:
         for x, y in points:
             if not (math.isfinite(x) and math.isfinite(y)):
                 continue
-            if x <= 0 or x > slow_dist:
-                continue
-            if abs(y) < front_hw:
+            # Front corridor: only forward points
+            if 0 < x <= slow_dist and abs(y) < front_hw:
                 min_front = min(min_front, x)
-            if x < slow_dist and hw <= y < hw + 0.4:
+            # Side checks: include points beside AND slightly behind the robot
+            # (mecanum can strafe, so side/rear obstacles matter)
+            if -hw < x < slow_dist and hw <= y < hw + 0.4:
                 left_free = False
-            if x < slow_dist and -(hw + 0.4) < y <= -hw:
+            if -hw < x < slow_dist and -(hw + 0.4) < y <= -hw:
                 right_free = False
 
         return min_front, left_free, right_free

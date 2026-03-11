@@ -510,7 +510,7 @@
     <!-- Hero Section -->
     <header class="hero">
         <h1>V2N Robot <span>Technical Guide</span></h1>
-        <p>Everything you need to understand, configure, and extend the Bowling Target Navigation System</p>
+        <p>Everything you need to understand, configure, and extend the Bottle Target Navigation System</p>
     </header>
 
     <!-- Table of Contents -->
@@ -558,18 +558,18 @@
         <section id="what-is-this">
             <h2>What Is This Robot?</h2>
 
-            <p>The V2N Bowling Target Navigation Robot is an <strong>autonomous mobile robot</strong> that can:</p>
+            <p>The V2N Bottle Target Navigation Robot is an <strong>autonomous mobile robot</strong> that can:</p>
 
             <div class="cards">
                 <div class="card card-blue">
                     <div class="card-icon">&#128270;</div>
-                    <h4>Detect Bowling Pins</h4>
-                    <p>Uses AI (YOLO) or V2N's DRP hardware to find bowling pins in camera images</p>
+                    <h4>Detect Bottles</h4>
+                    <p>Uses AI (YOLO) or V2N's DRP hardware to find bottles in camera images</p>
                 </div>
                 <div class="card card-green">
                     <div class="card-icon">&#128663;</div>
                     <h4>Navigate Autonomously</h4>
-                    <p>Drives toward detected pins while avoiding obstacles using LiDAR</p>
+                    <p>Drives toward detected bottles while avoiding obstacles using LiDAR</p>
                 </div>
                 <div class="card card-yellow">
                     <div class="card-icon">&#128506;</div>
@@ -616,7 +616,7 @@
 
             <div class="box box-blue">
                 <h4>In Simple Terms</h4>
-                <p>Think of it like this: The <strong>camera</strong> is the robot's eyes (finds pins), the <strong>LiDAR</strong> is like sonar (avoids walls), and the <strong>Arduino</strong> controls the wheels. The <strong>brain</strong> (state machine) decides what to do based on what the sensors see.</p>
+                <p>Think of it like this: The <strong>camera</strong> is the robot's eyes (finds bottles), the <strong>LiDAR</strong> is like sonar (avoids walls), and the <strong>Arduino</strong> controls the wheels. The <strong>brain</strong> (state machine) decides what to do based on what the sensors see.</p>
             </div>
         </section>
 
@@ -630,7 +630,7 @@
                 <div class="step">
                     <div class="step-num">1</div>
                     <div class="step-title">Search</div>
-                    <div class="step-desc">Rotate to find pins (SEARCHING)</div>
+                    <div class="step-desc">Rotate to find bottles (SEARCHING)</div>
                 </div>
                 <div class="step">
                     <div class="step-num">2</div>
@@ -686,7 +686,7 @@ Camera Frame (640x480 BGR)
                   │
                   ▼
         Detection Result:
-        • Class: "bowling-pins"
+        • Class: "bottle"
         • Confidence: 0.95
         • Position: (320, 240)
         • Distance: ~1.5 meters
@@ -694,7 +694,7 @@ Camera Frame (640x480 BGR)
 
             <h3>Distance Estimation</h3>
 
-            <p>The robot estimates how far away the pin is based on <strong>how big it looks</strong> in the camera:</p>
+            <p>The robot estimates how far away the bottle is based on <strong>how big it looks</strong> in the camera:</p>
 
             <div class="box box-green">
                 <h4>The Formula</h4>
@@ -702,9 +702,9 @@ Camera Frame (640x480 BGR)
                 <ul>
                     <li><strong>reference_box_height</strong> = Known bounding box height at reference distance (default: 100px)</li>
                     <li><strong>reference_distance</strong> = Known distance where reference was measured (default: 1.0m)</li>
-                    <li><strong>current_box_height</strong> = How tall the pin's bounding box is in the current image</li>
+                    <li><strong>current_box_height</strong> = How tall the bottle's bounding box is in the current image</li>
                 </ul>
-                <p style="margin-top:15px"><strong>Example:</strong> If reference is 100px at 1.0m, and the pin currently appears 50px tall → distance = 1.0 × (100 / 50) = 2.0 meters</p>
+                <p style="margin-top:15px"><strong>Example:</strong> If reference is 100px at 1.0m, and the bottle currently appears 50px tall → distance = 1.0 × (100 / 50) = 2.0 meters</p>
             </div>
 
             <h3>Movement Control</h3>
@@ -767,7 +767,7 @@ Movement combinations:
                         <td><strong>Camera</strong></td>
                         <td>USB Camera</td>
                         <td><code>/dev/video0</code></td>
-                        <td>Bowling pin detection</td>
+                        <td>Bottle detection</td>
                     </tr>
                     <tr>
                         <td><strong>Display</strong></td>
@@ -885,7 +885,7 @@ Movement combinations:
             <div class="code" data-lang="yaml">
 detection:
   confidence_threshold: <span class="number">0.35</span>
-  target_class: <span class="string">"bowling-pins"</span>     <span class="comment"># Class name used by YOLO model</span>
+  target_class: <span class="string">"bottle"</span>     <span class="comment"># Class name used by YOLO model</span>
 
   <span class="comment"># DRP-AI binary searched at:</span>
   <span class="comment"># /opt/drp/yolo_detection (default)</span>
@@ -910,8 +910,8 @@ detector.<span class="function">initialize</span>()
 <span class="comment"># Use it (same API for all detectors!)</span>
 result = detector.<span class="function">detect</span>(camera_frame)
 <span class="keyword">if</span> result.has_detections:
-    pin = result.best_detection
-    <span class="function">print</span>(f<span class="string">"Found pin at distance {pin.distance}m"</span>)
+    bottle = result.best_detection
+    <span class="function">print</span>(f<span class="string">"Found bottle at distance {bottle.distance}m"</span>)
             </div>
 
             <h3>DRP Binary Protocol</h3>
@@ -1021,19 +1021,19 @@ result = detector.<span class="function">detect</span>(camera_frame)
                     </tr>
                     <tr>
                         <td><span class="badge badge-yellow">SEARCHING</span></td>
-                        <td>Rotating in place to find bowling pins</td>
+                        <td>Rotating in place to find bottles</td>
                         <td>Spinning in place</td>
                         <td>NAVIGATING (target found)<br>IDLE (timeout 30s)</td>
                     </tr>
                     <tr>
                         <td><span class="badge badge-green">NAVIGATING</span></td>
-                        <td>Drives toward detected pin using holonomic drive</td>
+                        <td>Drives toward detected bottle using holonomic drive</td>
                         <td>Forward + turning</td>
                         <td>SEARCHING (target lost &gt;3s AND far &gt;0.8m)<br>BLIND_APPROACH (target lost &gt;3s AND close &lt;0.8m)<br>ARRIVED (within approach distance)</td>
                     </tr>
                     <tr>
                         <td><span class="badge" style="background:#fff3e0;color:#e65100">BLIND_APPROACH</span></td>
-                        <td>Dead-reckoning toward last known pin position when camera loses sight of it</td>
+                        <td>Dead-reckoning toward last known bottle position when camera loses sight of it</td>
                         <td>Forward toward last known position</td>
                         <td>ARRIVED (reached or LiDAR stop)<br>SEARCHING (heading diverge &gt;45° or timeout 8s)<br>NAVIGATING (target re-detected)</td>
                     </tr>
@@ -1232,7 +1232,7 @@ arduino.<span class="function">set_velocity</span>(<span class="number">0.1</spa
                 <p><strong>Symptoms:</strong> Camera shows image but no detection boxes</p>
                 <p><strong>Check:</strong></p>
                 <ul>
-                    <li>Is the bowling pin in frame?</li>
+                    <li>Is the bottle in frame?</li>
                     <li>Is confidence threshold too high? Try 0.3</li>
                     <li>Is the YOLO model file present?</li>
                 </ul>
@@ -1276,7 +1276,7 @@ systemctl status robot
     </main>
 
     <footer>
-        <p><strong>V2N Bowling Target Navigation</strong> - Technical Guide</p>
+        <p><strong>V2N Bottle Target Navigation</strong> - Technical Guide</p>
         <p style="margin-top: 15px">
             <a href="quick_start_guide.html">&#8592; Quick Start Guide</a>
         </p>

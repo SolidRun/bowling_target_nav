@@ -1,5 +1,5 @@
 """
-ROS2 Nodes for Bowling Target Navigation
+ROS2 Nodes for Target Navigation
 =========================================
 
 Each node is a standalone entry point with its own dependencies.
@@ -12,7 +12,4 @@ Active nodes:
     vision_node          Camera capture + YOLO detection publisher
     target_follower_node Visual-servoing target follower
     autonomous_explorer  Frontier-based autonomous exploration
-    target_gui_node      Standalone detection GUI
-    map_viewer_node      SLAM map viewer
-    slam_camera_gui      Combined SLAM + camera display
 """

@@ -1,5 +1,5 @@
 """
-Bowling Target Navigation - Test Suite
+Bottle Target Navigation - Test Suite
 =======================================
 
 Comprehensive tests for RZ/V2N robot hardware and software components.

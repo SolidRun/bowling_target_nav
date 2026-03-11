@@ -1,6 +1,6 @@
 # System Architecture
 
-> Block diagrams, design patterns, and architectural decisions for the V2N Bowling Robot.
+> Block diagrams, design patterns, and architectural decisions for the V2N Bottle Robot.
 
 ---
 
@@ -21,7 +21,7 @@
 
 ## 1. High-Level Overview
 
-The system is a self-contained ROS2 application that detects bowling pins with YOLO AI, maps the environment with SLAM, and navigates a mecanum-wheeled robot to the target.
+The system is a self-contained ROS2 application that detects bottles with YOLO AI, maps the environment with SLAM, and navigates a mecanum-wheeled robot to the target.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -134,7 +134,7 @@ main() entry point
        ┌────────────┐ ┌─────────┐ ┌──────────────┐
        │ ros_node.py│ │camera_  │ │ gui/         │
        │ (Thread 2) │ │worker.py│ │ main_window  │
-       └─────┬──────┘ │(Thread3)│ │ settings_win │
+       └─────┬──────┘ │(Thread3)│ │ settings_win │ (8 tabs, auto-save)
              │         └────┬────┘ │ panels/      │
              │              │      └──────┬───────┘
              │              │             │
@@ -212,26 +212,36 @@ The `SharedState` class implements the **Facade** and **Singleton** patterns, co
 │  │  _scan_count      │  │  Tunable Params: │             │
 │  │  _raw_scan        │  │  _detect_interval│             │
 │  │  _raw_scan_time   │  │  _detect_expiry  │             │
-│  │                   │  │  _confidence_thr  │             │
-│  │  RLock (0.1s)     │  │  _ref_box_height │             │
-│  └──────────────────┘  │  _ref_distance    │             │
-│                         │                  │             │
-│  ┌──────────────────┐  │  RLock (0.1s)     │             │
-│  │  NavStore         │  └──────────────────┘             │
-│  │                   │                                   │
-│  │  _nav_state (str) │  Writers / Readers:               │
-│  │  _nav_target      │  ┌──────────────────────────┐    │
-│  │  _go_requested    │  │ SensorStore:              │    │
-│  │  _stop_requested  │  │   Write: ROS thread       │    │
-│  │  _last_target_time│  │   Read: GUI, ROS thread   │    │
-│  │  _search_start    │  │                          │    │
-│  │  _obstacle_ahead  │  │ DetectionStore:           │    │
-│  │  _obstacle_dist   │  │   Write: Camera thread    │    │
-│  │  _nav_target_map  │  │   Read: ROS, GUI threads  │    │
-│  │  _current_cmd_vel │  │                          │    │
-│  │                   │  │ NavStore:                  │    │
-│  │  RLock (0.1s)     │  │   Write: ROS thread       │    │
-│  └──────────────────┘  │   Read: GUI thread         │    │
+│  │  _diagnostics     │  │  _confidence_thr │             │
+│  │                   │  │  _ref_box_height │             │
+│  │  RLock (0.1s)     │  │  _ref_distance   │             │
+│  └──────────────────┘  │                  │             │
+│                         │  Persisted Params:│             │
+│  ┌──────────────────┐  │  _map_params {}  │             │
+│  │  NavStore         │  │  _nav_params {}  │             │
+│  │                   │  │  _camera {}      │             │
+│  │  _nav_state (str) │  │  _lidar {}       │             │
+│  │  _nav_target      │  │  _robot {}       │             │
+│  │  _go_requested    │  │  _ref_point      │             │
+│  │  _stop_requested  │  │                  │             │
+│  │  _last_target_time│  │  RLock (0.1s)    │             │
+│  │  _search_start    │  └──────────────────┘             │
+│  │  _obstacle_ahead  │                                   │
+│  │  _obstacle_dist   │  Writers / Readers:               │
+│  │  _nav_target_map  │  ┌──────────────────────────┐    │
+│  │  _current_cmd_vel │  │ SensorStore:              │    │
+│  │                   │  │   Write: ROS thread       │    │
+│  │  RLock (0.1s)     │  │   Read: GUI, ROS thread   │    │
+│  └──────────────────┘  │                          │    │
+│                         │ DetectionStore:           │    │
+│                         │   Write: Camera thread    │    │
+│                         │   Write: GUI (settings)   │    │
+│                         │   Read: ROS, GUI threads  │    │
+│                         │   Persist: auto-save JSON  │    │
+│                         │                          │    │
+│                         │ NavStore:                  │    │
+│                         │   Write: ROS thread       │    │
+│                         │   Read: GUI thread         │    │
 │                         │   User cmds: GUI → ROS     │    │
 │                         └──────────────────────────┘    │
 └─────────────────────────────────────────────────────────┘
@@ -250,6 +260,27 @@ Singleton access:
 - **Copy-on-read** (numpy `.copy()`, list slicing) minimizes lock hold time
 - **`get_gui_snapshot()`** returns all GUI-needed nav data in a single lock acquisition
 - **`threading.Event`** for shutdown (atomic, no lock needed)
+
+### Parameter Persistence
+
+`DetectionStore` manages persistent configuration stored in `~/.config/bowling_target_nav/calibration.json`:
+
+```
+┌─────────────────┐    save_calibration()    ┌──────────────────────────┐
+│  DetectionStore  │ ──────────────────────► │  calibration.json         │
+│                  │                          │                          │
+│  _nav_params {}  │ ◄────────────────────── │  nav_params: {...}       │
+│  _map_params {}  │    _load_calibration()  │  map_params: {...}       │
+│  _camera {}      │                          │  camera_pos: {...}       │
+│  _lidar {}       │                          │  lidar_pos: {...}        │
+│  _robot {}       │                          │  robot_dims: {...}       │
+│  _ref_point      │                          │  ref_point: "front"      │
+│  calibration     │                          │  ref_box_height, ...     │
+└─────────────────┘                          └──────────────────────────┘
+```
+
+**Auto-save flow**: GUI slider change → `_schedule_auto_save()` → 2s debounce → `save_calibration()` → JSON file.
+**Load flow**: `DetectionStore.__init__()` → `_load_calibration()` → type-coerced restore with defaults for missing keys.
 
 ---
 
@@ -342,7 +373,7 @@ Detector    Detector     Detector
 │  │                                                          │  │
 │  │  1. Check user commands (GO/STOP)                         │  │
 │  │  2. Get latest detections                                 │  │
-│  │  3. find_best_target() → closest pin                     │  │
+│  │  3. find_best_target() → closest bottle                   │  │
 │  │  4. Decide action based on state:                         │  │
 │  │                                                          │  │
 │  │  Target visible?                                          │  │
@@ -581,7 +612,7 @@ Main GUI (standalone):
    │  9. Control loop (20Hz timer):                  │
    │     a. Read user commands (GO/STOP)             │
    │     b. Read DetectionStore.get_camera()         │
-   │     c. find_best_target() → closest pin        │
+   │     c. find_best_target() → closest bottle      │
    │     d. Navigator.navigate_to_target()           │
    │        - LiDAR+Vision fusion                    │
    │        - Obstacle check                         │

@@ -4,9 +4,25 @@ Robot Bringup Launch File
 
 Starts all robot drivers: LiDAR, Arduino (motors + odometry), and TF.
 
+Nodes launched:
+    - arduino_driver: Serial communication with Arduino (motor commands + encoder feedback)
+    - odometry_node: Mecanum wheel odometry from encoder ticks (publishes /odom + TF odom->base_link)
+    - robot_state_publisher: Publishes TF from URDF (base_link->laser, base_link->camera_link)
+    - rplidar_ros: RPLidar A1 driver (publishes /scan)
+
+TF tree produced:
+    odom -> base_link -> laser
+                      -> camera_link
+
 Usage:
+    # Default (all drivers):
     ros2 launch bowling_target_nav bringup.launch.py
-    ros2 launch bowling_target_nav bringup.launch.py lidar_port:=/dev/ttyUSB0
+
+    # Custom serial ports:
+    ros2 launch bowling_target_nav bringup.launch.py arduino_port:=/dev/ttyACM1 lidar_port:=/dev/ttyUSB1
+
+    # Without Arduino (LiDAR + TF only):
+    ros2 launch bowling_target_nav bringup.launch.py enable_arduino:=false
 """
 
 import os

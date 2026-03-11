@@ -55,8 +55,8 @@
 #define DRP_MAX_FREQ    2
 #define DRPAI_FREQ      1
 
-/* Class names */
-static const char* CLASS_NAMES[] = { "bowling-pins" };
+/* Class names (compile-time fallback — overridden at runtime by labels.txt or config.ini) */
+static const char* CLASS_NAMES[] = { "bottle" };
 
 /* Display text rendering */
 #define BOX_LINE_SIZE       2
@@ -67,5 +67,10 @@ static const char* CLASS_NAMES[] = { "bowling-pins" };
 
 /* Thread polling interval (microseconds) — used by multi-threaded camera pipeline */
 #define WAIT_TIME           1000
+
+/* Runtime class name accessor (defined in main.cpp) */
+#ifdef __cplusplus
+extern const char* get_class_name(int class_id);
+#endif
 
 #endif /* DEFINE_H */

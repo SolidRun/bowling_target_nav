@@ -1,10 +1,10 @@
 #!/bin/bash
 # =============================================================================
-# Start Automatic Bowling Pin Navigation
+# Start Automatic Bottle Target Navigation
 # =============================================================================
 #
 # This script starts all nodes needed for automatic navigation to detected
-# bowling pins using YOLO + Nav2.
+# bottles using YOLO + Nav2.
 #
 # Usage:
 #   ./start_pin_navigation.sh           # Start all nodes
@@ -30,7 +30,7 @@ FOLLOWER_MODE="nav2"
 
 # Parse arguments
 if [ "$1" == "--stop" ]; then
-    echo -e "${YELLOW}Stopping all pin navigation nodes...${NC}"
+    echo -e "${YELLOW}Stopping all target navigation nodes...${NC}"
     pkill -f "vision_node" 2>/dev/null || true
     pkill -f "target_follower_node" 2>/dev/null || true
     pkill -f "nav2" 2>/dev/null || true
@@ -55,7 +55,7 @@ if [ -f ~/ros2_ws/install/setup.bash ]; then
 fi
 
 echo -e "${CYAN}============================================${NC}"
-echo -e "${CYAN}  Automatic Bowling Pin Navigation${NC}"
+echo -e "${CYAN}  Automatic Bottle Target Navigation${NC}"
 echo -e "${CYAN}============================================${NC}"
 echo ""
 echo -e "Mode: ${GREEN}${FOLLOWER_MODE}${NC}"
@@ -117,9 +117,9 @@ echo -e "${GREEN}  All nodes started!${NC}"
 echo -e "${GREEN}============================================${NC}"
 echo ""
 echo "The robot will now:"
-echo "  1. Detect bowling pins using YOLO"
-echo "  2. Estimate distance to detected pins"
-echo "  3. Navigate to the nearest pin using Nav2"
+echo "  1. Detect bottles using YOLO"
+echo "  2. Estimate distance to detected bottles"
+echo "  3. Navigate to the nearest bottle using Nav2"
 echo ""
 echo "Topics to monitor:"
 echo "  ros2 topic echo /target_pose           # Detected target"

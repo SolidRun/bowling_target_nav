@@ -3,14 +3,21 @@
 Arduino Serial Bridge for ROS2 Driver Node
 ===========================================
 
-Production-quality serial bridge used by the ArduinoDriverNode.
-Provides async read loop, auto-reconnection, and telemetry parsing.
+Serial bridge used by the ArduinoDriverNode for non-blocking communication
+with the Arduino mecanum motor controller firmware. Provides:
+
+  - Background read thread: parses telemetry (ODOM, ENC) and command
+    responses (READY, OK, DONE, BUSY, ERROR) via on_response callback.
+  - Background reconnect thread: auto-reconnects with exponential backoff
+    (up to 30 s) when the serial port drops.
+  - Auto-detection: scans /dev/ttyACM* and /dev/ttyUSB* for known Arduino
+    vendor IDs (Arduino, CH340, CP210x, FTDI).
 
 Firmware Protocol (plain text, NO checksums):
-  TX: CMD[,arg1,arg2,...]\n
+  TX: CMD[,arg1,arg2,...]\\n
   RX: READY | OK | DONE | BUSY | ERROR: msg
   Telemetry: ODOM,vx,vy,wz | ENC,FL:t,FR:t,RL:t,RR:t,t_us:t
-  Watchdog: 200ms in VEL mode
+  Watchdog: 200 ms in VEL mode (must resend VEL before timeout or motors stop)
 """
 
 import threading
@@ -58,6 +65,13 @@ class ArduinoBridge:
         on_response: Optional[Callable[[str, list], None]] = None,
         on_state_change: Optional[Callable[[ArduinoState], None]] = None
     ):
+        """Initialize the bridge (does not open serial port yet).
+
+        Args:
+            config: Serial port configuration. Uses defaults if None.
+            on_response: Callback(command_str, args_list) for each parsed line.
+            on_state_change: Callback(ArduinoState) on connection state changes.
+        """
         self.config = config or ArduinoConfig()
         self.on_response = on_response
         self.on_state_change = on_state_change

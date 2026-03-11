@@ -1,4 +1,11 @@
-"""Thread-safe storage for map, robot pose, and LiDAR data."""
+"""Thread-safe storage for map, robot pose, and LiDAR data.
+
+Used in threading mode by the ROS thread (writes) and the GTK main loop
+(reads).  All public methods use an RLock with a short timeout so the
+GUI thread never blocks indefinitely.  In multiprocess mode the ROS
+process uses a local SensorStore internally and syncs to IPCHub via
+the outbound sync thread.
+"""
 
 import threading
 import time
@@ -40,6 +47,15 @@ class SensorStore:
 
     # -- Map --
     def set_map(self, img, info):
+        """Store a new SLAM map image and metadata.
+
+        Args:
+            img: BGR numpy array (H, W, 3) uint8.
+            info: ROS MapMetaData or MapInfo with resolution/origin.
+
+        Returns:
+            True on success, False if the lock timed out.
+        """
         if not self._try_lock():
             return False
         try:
@@ -56,7 +72,17 @@ class SensorStore:
         finally:
             self._release()
 
+    def get_map_count(self):
+        """Return current map update count without copying the image."""
+        if not self._try_lock():
+            return 0
+        try:
+            return self._map_count
+        finally:
+            self._release()
+
     def get_map(self):
+        """Return (map_img_copy, map_info, map_count) or (None, None, 0)."""
         if not self._try_lock():
             return None, None, 0
         try:
@@ -68,6 +94,16 @@ class SensorStore:
 
     # -- Robot pose --
     def set_robot_pose(self, x, y, theta):
+        """Update the robot pose from TF.
+
+        Args:
+            x: X position in map frame (meters).
+            y: Y position in map frame (meters).
+            theta: Heading angle (radians).
+
+        Returns:
+            True on success, False if the lock timed out.
+        """
         if not self._try_lock():
             return False
         try:
@@ -80,6 +116,7 @@ class SensorStore:
             self._release()
 
     def get_robot_pose(self):
+        """Return (x, y, theta) or (0.0, 0.0, 0.0) on lock timeout."""
         if not self._try_lock():
             return 0.0, 0.0, 0.0
         try:
@@ -89,6 +126,14 @@ class SensorStore:
 
     # -- Laser --
     def set_laser(self, points):
+        """Store new laser scan points and update scan rate.
+
+        Args:
+            points: numpy float32 array of shape (N, 2) with (x, y) pairs.
+
+        Returns:
+            True on success, False if the lock timed out.
+        """
         if not self._try_lock():
             return False
         try:
@@ -105,6 +150,7 @@ class SensorStore:
             self._release()
 
     def get_laser(self):
+        """Return (points_copy, scan_count, laser_time)."""
         if not self._try_lock():
             return np.empty((0, 2), dtype=np.float32), 0, 0.0
         try:
@@ -113,6 +159,14 @@ class SensorStore:
             self._release()
 
     def set_raw_scan(self, scan_msg):
+        """Store raw LaserScan message for angle-based distance lookup.
+
+        Args:
+            scan_msg: ROS sensor_msgs/LaserScan message.
+
+        Returns:
+            True on success, False if the lock timed out.
+        """
         if not self._try_lock():
             return False
         try:
@@ -142,7 +196,15 @@ class SensorStore:
             self._release()
 
     def get_lidar_distance_at_angle(self, angle_rad, window=0.15):
-        """Look up LiDAR range at a specific angle for distance fusion."""
+        """Look up LiDAR range at a specific angle for distance fusion.
+
+        Args:
+            angle_rad: Target angle in radians (in LiDAR frame).
+            window: Angular half-window (radians) to search around angle_rad.
+
+        Returns:
+            Minimum valid range within the window, or float('inf') if none.
+        """
         if not self._try_lock():
             return float('inf')
         try:

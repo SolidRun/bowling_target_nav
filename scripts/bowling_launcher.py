@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Floating desktop launcher for Bowling Target Nav GUI."""
+"""Floating desktop launcher for Bottle Target Nav GUI."""
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -84,9 +84,9 @@ def _kill_gui():
                    capture_output=True, timeout=3)
 
 
-class BowlingLauncher(Gtk.Window):
+class BottleLauncher(Gtk.Window):
     def __init__(self):
-        super().__init__(title="Bowling Nav")
+        super().__init__(title="Bottle Nav")
         self.set_default_size(320, 260)
         self.set_resizable(False)
         self.set_decorated(False)
@@ -117,7 +117,7 @@ class BowlingLauncher(Gtk.Window):
         box.pack_start(pin, False, False, 0)
 
         # Title
-        title = Gtk.Label(label="Bowling Target Nav")
+        title = Gtk.Label(label="Bottle Target Nav")
         title.get_style_context().add_class("title-label")
         box.pack_start(title, False, False, 0)
 
@@ -253,7 +253,7 @@ def main():
         time.sleep(1)
 
     os.environ.setdefault('HOME', '/root')
-    win = BowlingLauncher()
+    win = BottleLauncher()
     win.show_all()
     # Center on screen (set_position doesn't work on Wayland)
     screen = Gdk.Screen.get_default()

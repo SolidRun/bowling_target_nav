@@ -15,11 +15,16 @@ detection:
   # Confidence threshold for detections (0.0 - 1.0)
   confidence_threshold: 0.5
 
-  # Target class to detect
-  target_class: "bowling-pins"
-
-  # Only detect these classes (bowling pin related)
-  filter_classes: ["bowling-pins", "Bowlingpin-bowlingball"]
+  # Target profile — change this section to switch what the robot tracks
+  target:
+    # Detection class name (must match YOLO model class)
+    class_name: "bottle"
+    # Human-readable display name (for UI/logs)
+    display_name: "Bottle"
+    # Classes to accept from detector (model-specific)
+    filter_classes: ["bottle"]
+    # Real object height in meters (for distance estimation)
+    real_object_height: 0.25
 
   # Detection rate limit (max detections per second)
   max_detection_rate: 10
@@ -29,7 +34,7 @@ detection:
     model_path: "models/bowling_yolov5.onnx"
     input_size: [320, 320]
     # Class names in model (auto-detected from ONNX metadata)
-    class_names: ["Bowlingpin-bowlingball", "bowling-ball", "bowling-pins", "sweep board"]
+    class_names: ["bottle"]
 
   # V2N DRP Binary application settings
   drp_binary:
@@ -91,19 +96,19 @@ arduino:
 # -----------------------------------------------------------------------------
 navigation:
   # Speed limits (m/s and rad/s)
-  max_linear_speed: 0.3
-  max_angular_speed: 0.5
+  max_linear_speed: 0.15
+  max_angular_speed: 0.4
 
   # Default navigation speeds
-  default_linear_speed: 0.15
+  default_linear_speed: 0.10
   default_angular_speed: 0.3
 
   # Obstacle avoidance
-  obstacle_distance_threshold: 0.4  # meters
-  obstacle_slowdown_distance: 0.8   # meters
+  obstacle_distance_threshold: 0.20  # meters
+  obstacle_slowdown_distance: 0.4    # meters
 
   # Target approach
-  target_reached_distance: 0.3      # meters
+  target_reached_distance: 0.08      # meters - get very close to target
 
   # Search behavior when target lost
   search:
@@ -126,7 +131,7 @@ distance_estimation:
   # Bounding box height method parameters
   bbox_height:
     focal_length: 500.0             # Camera focal length in pixels
-    real_object_height: 0.38        # Real bowling pin height in meters
+    real_object_height: 0.38        # Real target object height in meters
 
   # Bounding box area method parameters
   bbox_area:

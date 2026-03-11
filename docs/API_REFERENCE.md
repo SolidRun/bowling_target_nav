@@ -90,11 +90,35 @@ Thread-safe container for camera frames, detections, and tunable parameters.
 | `set_detect_expiry` | `(val: float)` | `None` | Seconds before detection expires |
 | `get_detect_expiry` | `()` | `float` | Current detection expiry |
 | `set_confidence_threshold` | `(val: float)` | `None` | Min YOLO confidence |
-| `get_confidence_threshold` | `()` | `float` | Current threshold |
+| `get_confidence_threshold` | `()` | `float` | Current threshold (default 0.50) |
 | `set_calibration` | `(box_height: float, distance: float)` | `None` | Distance calibration reference |
 | `get_calibration` | `()` | `(height, distance)` | Current calibration values |
+| `set_camera_pos` | `(x, y, z: float)` | `None` | Camera position relative to base_link |
+| `get_camera_pos` | `()` | `dict` | `{'x', 'y', 'z'}` camera position |
+| `set_lidar_pos` | `(x, y, z: float)` | `None` | LiDAR position relative to base_link |
+| `get_lidar_pos` | `()` | `dict` | `{'x', 'y', 'z'}` LiDAR position |
+| `set_robot_dims` | `(l, w, h: float)` | `None` | Robot physical dimensions |
+| `get_robot_dims` | `()` | `dict` | `{'length', 'width', 'height'}` |
+| `set_ref_point` | `(point: str)` | `None` | Distance reference point (center/front/camera/lidar) |
+| `get_ref_point` | `()` | `str` | Current reference point |
+| `get_sensor_offset` | `()` | `float` | Distance offset from camera to reference point |
+| `set_map_param` | `(key, value)` | `None` | Set map display parameter |
+| `get_map_param` | `(key)` | `any` | Get map display parameter |
+| `get_map_params` | `()` | `dict` | All map display parameters |
+| `set_nav_param` | `(key, value)` | `None` | Set navigation parameter |
+| `get_nav_param` | `(key)` | `any` | Get navigation parameter |
+| `get_nav_params` | `()` | `dict` | All 21 navigation parameters |
+| `save_calibration` | `()` | `None` | Persist all params to JSON file |
+| `compute_expected_box_height` | `(distance)` | `float` | Expected bbox height at distance |
 
-**Default values**: detect_interval=2.0s, detect_expiry=1.5s, confidence=0.35, ref_box_height=100px, ref_distance=1.0m
+**Default values**: detect_interval=2.0s, detect_expiry=1.5s, confidence=0.50, ref_box_height=100px, ref_distance=1.0m
+
+**Persisted parameters** (saved to `~/.config/bowling_target_nav/calibration.json`):
+- Calibration: ref_box_height, ref_distance
+- Camera/LiDAR positions, robot dimensions
+- Distance reference point
+- Map display params (7 keys)
+- Navigation params (21 keys)
 
 ---
 
@@ -137,7 +161,7 @@ Thread-safe container for navigation state, commands, and obstacle info.
 }
 ```
 
-**Navigation states**: `"IDLE"`, `"SEARCHING"`, `"NAVIGATING"`, `"BLIND_APPROACH"`, `"ARRIVED"`, `"UNKNOWN"` (lock timeout fallback)
+**Navigation states**: `"IDLE"`, `"SEARCHING"`, `"SPIRAL_SEARCH"`, `"NAVIGATING"`, `"BLIND_APPROACH"`, `"ARRIVED"`, `"ERROR"`, `"UNKNOWN"` (lock timeout fallback)
 
 > The GUI also handles `"ERROR"` state for display purposes (badge color defined in camera_panel.py).
 
@@ -163,25 +187,34 @@ Navigator(state, cmd_vel_pub, tf_buffer, nav_client, logger)
 | `nav_client` | `ActionClient or None` | Optional Nav2 client |
 | `logger` | `rclpy.Logger` | ROS2 logger |
 
-#### Tunable Parameters (set via Settings GUI)
+#### Tunable Parameters (set via Settings GUI, persisted via DetectionStore)
+
+All 21 navigation parameters are loaded from `DetectionStore.get_nav_params()` on init and can be changed at runtime via the Settings window. Changes are auto-saved to disk.
 
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `approach_distance` | float | 0.15 m | Arrival detection threshold |
+| `approach_distance` | float | 0.0 m | Arrival detection threshold |
 | `linear_speed` | float | 0.15 m/s | Navigation forward speed |
 | `min_linear_speed` | float | 0.10 m/s | Motor dead zone floor |
-| `angular_speed` | float | 0.5 rad/s | Maximum rotation speed |
-| `obstacle_distance` | float | 0.25 m | Emergency stop trigger |
-| `obstacle_slowdown_distance` | float | 0.5 m | Gradual slowdown zone |
+| `angular_speed` | float | 0.4 rad/s | Maximum rotation speed |
+| `obstacle_distance` | float | 0.20 m | Emergency stop trigger |
+| `obstacle_slowdown_distance` | float | 0.4 m | Gradual slowdown zone |
 | `robot_half_width` | float | 0.15 m | LiDAR corridor width |
-| `search_angular_speed` | float | 0.4 rad/s | Search rotation speed |
+| `search_angular_speed` | float | 0.35 rad/s | Search rotation speed |
 | `lost_timeout` | float | 3.0 s | Before blind approach/search |
 | `search_timeout` | float | 30.0 s | Maximum search duration |
-| `blind_approach_entry_distance` | float | 0.80 m | Activation threshold |
-| `blind_approach_speed` | float | 0.10 m/s | Dead-reckon speed |
-| `blind_approach_timeout` | float | 8.0 s | Max blind approach time |
-| `blind_approach_lidar_stop` | float | 0.12 m | Emergency stop distance |
-| `blind_approach_arrival_margin` | float | 0.10 m | Arrival tolerance |
+| `blind_approach_entry_distance` | float | 0.37 m | Activation threshold |
+| `blind_approach_speed` | float | 0.12 m/s | Dead-reckon speed |
+| `blind_approach_timeout` | float | 10.0 s | Max blind approach time |
+| `blind_approach_lidar_stop` | float | 0.06 m | Emergency stop distance |
+| `blind_approach_arrival_margin` | float | 0.05 m | Arrival tolerance |
+| `spiral_search_enabled` | bool | True | Enable spiral search after 360° scan |
+| `spiral_initial_radius` | float | 0.3 m | Starting spiral radius |
+| `spiral_max_radius` | float | 2.0 m | Maximum spiral radius |
+| `spiral_growth_rate` | float | 0.15 m/rev | Spiral expansion rate |
+| `spiral_linear_speed` | float | 0.10 m/s | Speed during spiral |
+| `spiral_angular_speed` | float | 0.25 rad/s | Rotation during spiral |
+| `spiral_timeout` | float | 45.0 s | Max spiral search duration |
 
 #### Methods
 
@@ -203,7 +236,7 @@ target = {
     'distance': 0.45,        # Vision-estimated distance (meters)
     'angle': 0.12,           # Horizontal angle (radians, +=right camera convention)
     'bbox_clipped': False,   # True if bbox extends beyond image edges
-    'class_name': 'bowling-pins',
+    'class_name': 'bottle',
     'confidence': 0.85,
     'bbox': (100, 120, 450, 480),  # (x1, y1, x2, y2)
 }
@@ -250,7 +283,7 @@ Creates `MainGuiNode(Node)` and spins it.
 ```
 1. Check GO/STOP flags
 2. Read latest detections from DetectionStore
-3. find_best_target() → closest pin
+3. find_best_target() → closest bottle
 4. Navigate based on state:
    - Target visible → navigate_to_target()
    - Lost < 3s → drift forward
@@ -293,7 +326,7 @@ Main camera worker running in its own thread.
 ```python
 @dataclass
 class Detection:
-    class_name: str              # e.g., "bowling-pins"
+    class_name: str              # e.g., "bottle"
     class_id: int                # Numeric class ID
     confidence: float            # 0.0-1.0
     bbox: tuple[int,int,int,int] # (x1, y1, x2, y2)
@@ -341,7 +374,7 @@ class DetectionResult:
 ### `DetectorBase` (detectors/base.py) — Abstract Base Class
 
 ```python
-DetectorBase(confidence_threshold=0.5, target_class="bowling-pins", **kwargs)
+DetectorBase(confidence_threshold=0.5, target_class="bottle", **kwargs)
 ```
 
 | Abstract Property | Returns | Description |
@@ -370,10 +403,10 @@ DetectorBase(confidence_threshold=0.5, target_class="bowling-pins", **kwargs)
 YoloOnnxDetector(
     model_path="models/bowling_yolov5.onnx",
     input_size=(640, 640),
-    class_names=["bowling-pins"],
+    class_names=["bottle"],
     confidence_threshold=0.5,
     nms_threshold=0.45,
-    target_class="bowling-pins",
+    target_class="bottle",
     filter_classes=None,
     **kwargs
 )
@@ -393,7 +426,7 @@ DrpBinaryDetector(
     binary_path=None,             # Auto-find at /opt/drp/yolo_detection
     model_dir=None,               # Auto-find at /opt/drp/drpai_model
     confidence_threshold=0.5,
-    target_class="bowling-pins",
+    target_class="bottle",
     class_names=None,
     startup_timeout=30.0,
     **kwargs
@@ -461,7 +494,9 @@ MainGUI(shared_state: SharedState)  # Extends Gtk.Window
 SettingsWindow(shared_state: SharedState)  # Extends Gtk.Window
 ```
 
-5 tabs: Navigation, Blind Approach, Detection, Obstacle, Calibration.
+8 tabs: Navigation, Search, Blind, Detection, Obstacle, Map, Setup, Tools.
+Auto-saves all parameter changes to disk with 2-second debounce.
+Publishes Arduino calibration commands via `/arduino/cmd` topic (`std_msgs/String`).
 
 ### Panel Functions
 

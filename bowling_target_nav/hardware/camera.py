@@ -2,8 +2,19 @@
 Camera Capture
 ==============
 
-Abstract base class and implementations for camera capture.
-Supports real OpenCV capture and mock for testing.
+Abstract base class and implementations for camera frame capture.
+
+Provides:
+  - CameraBase: Abstract interface (open/close/read/get_frame).
+  - CameraCapture: Real camera using OpenCV VideoCapture with optional
+    auto-reconnect on read failure.
+  - MockCamera: Test camera generating gradient, noise, checkerboard,
+    or static pattern frames at a configurable frame rate.
+  - create_camera(): Factory function that selects real or mock camera
+    based on flags and optional config object.
+
+FrameData wraps a numpy BGR frame with timestamp, frame number, and
+dimensions for downstream consumers.
 """
 
 import logging

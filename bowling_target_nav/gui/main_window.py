@@ -1,14 +1,35 @@
-"""Main fullscreen GTK3 window for V2N Robot Control GUI."""
+"""Main fullscreen GTK3 window for V2N Robot Control GUI.
+
+Provides the MainGUI class which renders a split-panel display:
+  - Left panel: SLAM map with robot pose, laser scan, and navigation target
+  - Right panel: Camera feed with detection overlays
+
+The window includes a bottom control bar with GO/STOP buttons, a live
+navigation status label (Pango markup), and buttons for settings and quit.
+Rendering is delegated to panel functions in gui/panels/. All robot state
+is accessed through the shared_state facade (works in both threading and
+multiprocess modes).
+
+Keyboard shortcuts: G = go, S/Space = stop, Q/Escape = quit.
+Refresh rate: ~30 FPS via GLib.timeout_add.
+"""
 
 import math
+import sys
+import traceback
 
 import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gdk, GLib
 
-from .settings_window import SettingsWindow
 from .panels.map_panel import draw_map_panel
 from .panels.camera_panel import draw_camera_panel
+
+_LOG_TAG = "[MainWindow]"
+
+
+def _log(msg):
+    print(f"{_LOG_TAG} {msg}", flush=True)
 
 
 class MainGUI(Gtk.Window):
@@ -19,8 +40,20 @@ class MainGUI(Gtk.Window):
     """
 
     def __init__(self, shared_state):
-        super().__init__(title="V2N Robot Control")
+        """Initialize the fullscreen main window.
+
+        Args:
+            shared_state: SharedState or IPCState facade providing access to
+                navigation, detection, and sensor data across threads/processes.
+        """
+        _log("__init__ start")
+        from bowling_target_nav.core.config import get_config
+        self._display_name = get_config().detection.target.display_name
+        super().__init__(title=f"V2N {self._display_name} Control")
         self._state = shared_state
+        self._settings_window = None
+        self._quitting = False
+        self._timer_id = None
         self.fullscreen()
 
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -59,7 +92,6 @@ class MainGUI(Gtk.Window):
         control_box.pack_start(self.status_label, True, True, 20)
 
         # Settings button
-        self.settings_window = SettingsWindow(shared_state)
         settings_btn = Gtk.Button(label="SETTINGS")
         settings_btn.set_size_request(120, 60)
         settings_btn.get_style_context().add_class('settings-btn')
@@ -80,22 +112,79 @@ class MainGUI(Gtk.Window):
 
         # 30 FPS refresh
         self._timer_id = GLib.timeout_add(33, self._on_tick)
+        _log("__init__ done")
+
+    # ---- Lazy settings window creation ----
+
+    def _ensure_settings_window(self):
+        """Create the settings window on first use (not during __init__)."""
+        if self._settings_window is not None:
+            return True
+        try:
+            _log("Creating SettingsWindow (lazy)...")
+            from .settings_window import SettingsWindow
+            self._settings_window = SettingsWindow(self._state)
+            _log("SettingsWindow created OK")
+            return True
+        except Exception as e:
+            _log(f"FAILED to create SettingsWindow: {e}")
+            traceback.print_exc()
+            return False
 
     # ---- Button handlers ----
 
     def _on_go(self, button):
+        """Handle GO button click -- request navigation start."""
+        _log("GO clicked")
         self._state.nav.request_go()
 
     def _on_stop(self, button):
+        """Handle STOP button click -- request navigation halt."""
+        _log("STOP clicked")
         self._state.nav.request_stop()
 
     def _on_settings(self, button):
-        self.settings_window.show_all()
-        self.settings_window.present()
+        """Open the settings window, hiding the main window while it is shown."""
+        _log("SETTINGS clicked")
+        try:
+            if not self._ensure_settings_window():
+                _log("Cannot open settings - creation failed")
+                return
+
+            self._settings_window._parent_window = self
+            _log("Hiding main window...")
+            self.hide()
+            _log("Main window hidden. Showing settings...")
+            self._settings_window.show_all()
+            _log("Settings show_all done. Fullscreening...")
+            self._settings_window.fullscreen()
+            _log("Settings window opened OK")
+        except Exception as e:
+            _log(f"Settings error: {e}")
+            traceback.print_exc()
+            # Recover: show main window again
+            self.show_all()
+            self.fullscreen()
+
+    def return_from_settings(self):
+        """Called by SettingsWindow to return to this window."""
+        _log("Returning from settings")
+        if self._settings_window:
+            self._settings_window.hide()
+        self.show_all()
+        self.fullscreen()
+        _log("Main window restored")
 
     # ---- Tick / draw ----
 
     def _on_tick(self):
+        """30 FPS timer callback -- update status label and request a redraw.
+
+        Returns:
+            True to keep the timer running, False to stop it.
+        """
+        if self._quitting:
+            return False
         if not self._state.running:
             self.on_quit(None)
             return False
@@ -105,17 +194,28 @@ class MainGUI(Gtk.Window):
         return True
 
     def _update_status(self):
-        # Single lock acquisition instead of 6 separate ones
-        snap = self._state.nav.get_gui_snapshot()
-        nav_state = snap['nav_state']
-        nav_target = snap['nav_target']
-        time_since_target = snap['time_since_target']
-        search_time = snap['search_time']
-        vx, vy, wz = snap['cmd_vel']
+        """Update the status bar label with current navigation state.
+
+        Reads a snapshot from the nav state facade and renders Pango markup
+        showing nav state, target distance, speed, obstacle warnings, and
+        search timers.
+        """
+        try:
+            snap = self._state.nav.get_gui_snapshot()
+        except Exception as e:
+            _log(f"get_gui_snapshot error: {e}")
+            return
+
+        nav_state = snap.get('nav_state', 'UNKNOWN')
+        nav_target = snap.get('nav_target')
+        time_since_target = snap.get('time_since_target', 999.0)
+        search_time = snap.get('search_time', 0.0)
+        cmd_vel = snap.get('cmd_vel', (0.0, 0.0, 0.0))
+        vx, vy, wz = cmd_vel
         speed = math.sqrt(vx * vx + vy * vy)
 
-        obs_str = (f" <span foreground='#ff6b6b' weight='bold'>\u26a0 OBS {snap['obstacle_dist']:.2f}m</span>"
-                   if snap['obstacle_ahead'] else "")
+        obs_str = (f" <span foreground='#ff6b6b' weight='bold'>\u26a0 OBS {snap.get('obstacle_dist', 999):.2f}m</span>"
+                   if snap.get('obstacle_ahead') else "")
         spd_str = (f" <span foreground='#79c0ff'>\u2192 {speed:.2f} m/s</span>"
                    if speed > 0.01 else "")
 
@@ -125,6 +225,12 @@ class MainGUI(Gtk.Window):
                       f"<span foreground='#b0b8c2'>{search_time:.0f}s elapsed</span>"
                       f"  <span foreground='#8899aa'>Lost {time_since_target:.0f}s</span>"
                       f"{obs_str}")
+        elif nav_state == "SPIRAL_SEARCH":
+            markup = (f"<span foreground='#e09040' weight='bold' size='large'>"
+                      f"\u25cf SPIRAL SEARCH</span>  "
+                      f"<span foreground='#b0b8c2'>{search_time:.0f}s elapsed</span>"
+                      f"  <span foreground='#8899aa'>Lost {time_since_target:.0f}s</span>"
+                      f"{spd_str}{obs_str}")
         elif nav_state == "BLIND_APPROACH":
             markup = (f"<span foreground='#ffb347' weight='bold' size='large'>"
                       f"\u25cf BLIND APPROACH</span>  "
@@ -152,6 +258,12 @@ class MainGUI(Gtk.Window):
         self.status_label.set_markup(markup)
 
     def on_draw(self, widget, cr):
+        """Cairo draw handler -- render title bar then delegate to panel renderers.
+
+        Args:
+            widget: The DrawingArea widget.
+            cr: Cairo context for drawing.
+        """
         try:
             alloc = widget.get_allocation()
             W, H = alloc.width, alloc.height
@@ -170,9 +282,9 @@ class MainGUI(Gtk.Window):
 
             # Title bar
             cr.set_source_rgb(0.345, 0.651, 1.0)
-            cr.set_font_size(26)
-            cr.move_to(margin, 36)
-            cr.show_text("V2N Robot Control")
+            cr.set_font_size(20)
+            cr.move_to(margin, 32)
+            cr.show_text(f"V2N {self._display_name} Control")
 
             cr.set_font_size(14)
             det_mode = self._state.detection.get_detector_mode()
@@ -193,14 +305,18 @@ class MainGUI(Gtk.Window):
             draw_camera_panel(cr, cam_x, cam_y, panel_w, panel_h, self._state)
 
         except Exception as e:
-            print(f"[GUI] Draw error: {e}", flush=True)
+            _log(f"Draw error: {e}")
 
         return False
 
     # ---- Keyboard ----
 
     def _on_key(self, widget, event):
-        key = Gdk.keyval_name(event.keyval).lower()
+        """Handle keyboard shortcuts (G=go, S/Space=stop, Q/Escape=quit)."""
+        key = Gdk.keyval_name(event.keyval)
+        if key is None:
+            return False
+        key = key.lower()
         if key in ('q', 'escape'):
             self.on_quit(None)
         elif key == 'g':
@@ -212,8 +328,24 @@ class MainGUI(Gtk.Window):
     # ---- Quit ----
 
     def on_quit(self, widget):
-        print("[GUI] Quit requested", flush=True)
+        """Shut down the application: stop state, destroy settings, remove timer."""
+        if self._quitting:
+            return
+        self._quitting = True
+        _log("Quit requested")
         self._state.request_shutdown()
-        if hasattr(self, '_timer_id'):
-            GLib.source_remove(self._timer_id)
+        # Cleanup settings window
+        if self._settings_window:
+            try:
+                self._settings_window.destroy()
+            except Exception:
+                pass
+            self._settings_window = None
+        # Remove timer safely
+        if self._timer_id is not None:
+            try:
+                GLib.source_remove(self._timer_id)
+            except Exception:
+                pass
+            self._timer_id = None
         Gtk.main_quit()

@@ -1,5 +1,5 @@
 # =============================================================================
-# Bowling Target Navigation Parameters
+# Bottle Target Navigation Parameters
 # =============================================================================
 #
 # This file contains all tunable parameters for the target navigation system.
@@ -40,11 +40,11 @@ vision_node:
     # Detection Parameters
     # --------------------
     # target_class: Which class to track
-    # Available model classes: "Bowlingpin-bowlingball", "bowling-ball", "bowling-pins", "sweep board"
-    target_class: "bowling-pins"
+    # Class name must match your YOLO model output
+    target_class: "bottle"
 
-    # Only detect these classes (pin-related only, ignores ball/sweep)
-    filter_classes: ["bowling-pins", "Bowlingpin-bowlingball"]
+    # Only detect these classes (target-related only, ignores others)
+    filter_classes: ["bottle"]
 
     # Minimum confidence threshold (0.0 - 1.0)
     conf_threshold: 0.5
@@ -65,15 +65,15 @@ vision_node:
     # Distance Estimation (CALIBRATION REQUIRED)
     # ------------------------------------------
     # To calibrate:
-    #   1. Place bowling pin at exactly 1.0 meter from camera
+    #   1. Place target object at exactly 1.0 meter from camera
     #   2. Run vision node and check /target_detection topic
     #   3. Note the bounding box height in pixels
     #   4. Set reference_box_height to that value
     #
-    # Example: If pin at 1m has box height of 120 pixels:
+    # Example: If target at 1m has box height of 120 pixels:
     #   reference_box_height: 120.0
     #   reference_distance: 1.0
-    reference_box_height: 200.0   # pixels at reference_distance (bowling pin ~38cm at 1m)
+    reference_box_height: 200.0   # pixels at reference_distance (target object at 1m)
     reference_distance: 1.0       # meters
 
     # Publishing
@@ -101,11 +101,11 @@ target_follower_node:
 
     # Approach Behavior
     # -----------------
-    approach_distance: 0.3    # meters - stop this far from target
+    approach_distance: 0.08   # meters - stop this far from target (get close)
 
     # Motion Limits
     # -------------
-    linear_speed: 0.15        # m/s - maximum forward speed
+    linear_speed: 0.10        # m/s - maximum forward speed (slow and careful)
     angular_speed: 0.3        # rad/s - maximum rotation speed
 
     # Target Lost Behavior

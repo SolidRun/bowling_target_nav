@@ -1,9 +1,9 @@
 """
 =============================================================================
-Bowling Target Navigation Launch File
+Target Navigation Launch File
 =============================================================================
 
-Launches the vision and navigation nodes for autonomous bowling pin approach.
+Launches the vision and navigation nodes for autonomous target approach.
 
 Components:
     1. vision_node - Camera capture and YOLO detection
@@ -83,20 +83,14 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             'target_class',
-            default_value='Pins',
-            description='Object class to track (Pins, Ball, Pin+Ball, Sweep)'
+            default_value='bottle',
+            description='Object class to detect (must match YOLO model class)'
         ),
 
         DeclareLaunchArgument(
             'model_path',
             default_value=default_model,
             description='Path to YOLO ONNX model'
-        ),
-
-        DeclareLaunchArgument(
-            'enable_gui',
-            default_value='false',
-            description='Enable GUI display (requires Wayland on V2N)'
         ),
 
         DeclareLaunchArgument(
@@ -143,17 +137,6 @@ def generate_launch_description():
                     'mode': LaunchConfiguration('follower_mode'),
                 }
             ],
-        ),
-
-        # =====================================================================
-        # GUI Node (Optional - for V2N display)
-        # =====================================================================
-        Node(
-            package='bowling_target_nav',
-            executable='target_gui_node',
-            name='target_gui_node',
-            output='screen',
-            condition=IfCondition(LaunchConfiguration('enable_gui')),
         ),
 
         # =====================================================================

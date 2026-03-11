@@ -27,7 +27,7 @@ class YoloOnnxDetector(DetectorBase):
             model_path="models/bowling_yolov5.onnx",
             confidence_threshold=0.5,
             input_size=(640, 640),
-            class_names=["bowling_pin"]
+            class_names=["bottle"]
         )
         detector.initialize()
         result = detector.detect(frame)
@@ -40,7 +40,7 @@ class YoloOnnxDetector(DetectorBase):
         class_names: Optional[List[str]] = None,
         confidence_threshold: float = 0.5,
         nms_threshold: float = 0.45,
-        target_class: str = "bowling_pin",
+        target_class: str = "bottle",
         filter_classes: Optional[List[str]] = None,
         **kwargs
     ):
@@ -64,7 +64,7 @@ class YoloOnnxDetector(DetectorBase):
 
         self.model_path = model_path
         self.input_size = input_size
-        self.class_names = class_names or ["bowling_pin"]
+        self.class_names = class_names or ["bottle"]
         self.nms_threshold = nms_threshold
         self.filter_classes = filter_classes
 
@@ -316,7 +316,8 @@ class YoloOnnxDetector(DetectorBase):
             h = np.maximum(0, yy2 - yy1)
 
             intersection = w * h
-            iou = intersection / (areas[i] + areas[order[1:]] - intersection)
+            denominator = areas[i] + areas[order[1:]] - intersection
+            iou = intersection / np.maximum(denominator, 1e-8)
 
             inds = np.where(iou <= self.nms_threshold)[0]
             order = order[inds + 1]

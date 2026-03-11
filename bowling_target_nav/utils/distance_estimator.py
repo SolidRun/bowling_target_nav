@@ -32,7 +32,7 @@ class DistanceEstimator:
     Estimates distance and angle to detected object from bounding box size.
 
     The distance estimation assumes:
-        - Object size is relatively constant (e.g., bowling pin)
+        - Object size is relatively constant (e.g., bottle)
         - Bounding box height is proportional to apparent size
         - Camera has known field of view
 
@@ -50,6 +50,11 @@ class DistanceEstimator:
                  frame_width: int = 320,
                  frame_height: int = 240,
                  horizontal_fov: float = 60.0):
+
+        if frame_width <= 0 or frame_height <= 0:
+            raise ValueError(f"Invalid frame dimensions: {frame_width}x{frame_height}")
+        if horizontal_fov <= 0 or horizontal_fov >= 180:
+            raise ValueError(f"Invalid FOV: {horizontal_fov}")
 
         self.reference_box_height = reference_box_height
         self.reference_distance = reference_distance

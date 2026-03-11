@@ -2,8 +2,19 @@
 Detector Base Class
 ===================
 
-Abstract base class for all object detectors.
-Implements Strategy pattern for pluggable detection backends.
+Abstract base class for all object detectors (Strategy pattern).
+
+Defines three core types:
+  - Detection: A single detected object with bbox, confidence, class, and
+    optional distance estimate.
+  - DetectionResult: Container for a batch of detections from one inference
+    pass, with timing, filtering helpers, and error reporting.
+  - DetectorBase: Abstract base that concrete backends (ONNX, DRP-AI pipe,
+    etc.) must subclass. Provides initialize/detect/shutdown lifecycle,
+    automatic center normalization, and inference statistics.
+
+Subclasses implement _load_model() and _detect_impl(frame). The public
+detect() method handles timing, normalization, and error wrapping.
 """
 
 import logging
@@ -22,7 +33,7 @@ class Detection:
     Represents a single object detection.
 
     Attributes:
-        class_name: Name of detected class (e.g., "bowling_pin")
+        class_name: Name of detected class (e.g., "bottle")
         class_id: Numeric class ID
         confidence: Detection confidence (0.0 - 1.0)
         bbox: Bounding box as (x1, y1, x2, y2) in pixels
@@ -141,7 +152,7 @@ class DetectorBase(ABC):
     def __init__(
         self,
         confidence_threshold: float = 0.5,
-        target_class: str = "bowling_pin",
+        target_class: str = "bottle",
         **kwargs
     ):
         """

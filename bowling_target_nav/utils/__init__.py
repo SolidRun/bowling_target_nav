@@ -1,5 +1,5 @@
 """
-Utility Modules for Bowling Target Navigation
+Utility Modules for Target Navigation
 """
 
 from .distance_estimator import DistanceEstimator, DistanceEstimatorIndex

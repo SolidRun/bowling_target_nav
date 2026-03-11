@@ -10,7 +10,7 @@ source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
 
 echo "=========================================="
-echo "  SLAM Mapping - Bowling Target Nav"
+echo "  SLAM Mapping - Bottle Target Nav"
 echo "=========================================="
 echo "  Using RPLidar A1 (115200 baud)"
 echo "=========================================="

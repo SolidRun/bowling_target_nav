@@ -1,360 +1,134 @@
 # Bowling Target Navigation — RZ/V2N Robot
 
-> [!WARNING]
-> This project is under active development. APIs, configuration, and behavior may change without notice. Use at your own risk in production environments.
+Autonomous bottle detection and navigation for the Renesas RZ/V2N mecanum robot. DRP-AI hardware-accelerated YOLO detection, Cartographer SLAM, holonomic VFH navigation, all in a fullscreen GTK3 GUI.
 
-> Autonomous bowling pin detection and navigation for the Renesas RZ/V2N mecanum robot.
-> Combines SLAM mapping, YOLO AI detection, and holonomic navigation in a single fullscreen GUI.
+## Architecture
+
+3 processes on 3 CPU cores:
+
+| Core | Process | Modules | Rate |
+|------|---------|---------|------|
+| 0 | GUI (main) | GTK3 rendering, settings, user input | 30fps |
+| 1 | ROS2 + Navigation | /map, /scan, TF2, control loop, Navigator | 20Hz |
+| 2 | Camera + DRP-AI | C++ stream inference, distance estimation | ~15fps |
+
+IPC via SharedMemory (frames/map/laser), mp.Array (pose/nav state), mp.Queue (commands).
+
+Set `BOWLING_NAV_MULTIPROCESS=0` for single-process threading mode.
+
+## Detection Pipeline
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     V2N Robot Control GUI                        │
-│  ┌────────────────────────┐  ┌────────────────────────────────┐ │
-│  │                        │  │                                │ │
-│  │     SLAM Map           │  │    Camera + YOLO Detection     │ │
-│  │   (robot, laser,       │  │  (bounding boxes, distance,    │ │
-│  │    grid, target)       │  │   angle, crosshair)            │ │
-│  │                        │  │                                │ │
-│  └────────────────────────┘  └────────────────────────────────┘ │
-│  [GO TO TARGET]  [STOP]   ● NAVIGATING 0.45m  [SETTINGS] [QUIT]│
-└─────────────────────────────────────────────────────────────────┘
+DRP-AI C++ Binary (stream mode)
+    │
+    ├── Camera frames → /dev/shm/v2n_camera (zero-copy)
+    └── JSON detections → stdout
+            │
+            ▼
+    camera_worker.py filters:
+    1. Confidence threshold (default 0.30)
+    2. Min box size (10x15px — reject noise)
+    3. Max box size (80% frame — reject false positives)
+    4. Aspect ratio (bottle taller than wide)
+    5. Bbox size tracker (rolling median, reject outliers)
+            │
+            ▼
+    Distance estimator (bbox height → meters)
+            │
+            ▼
+    IPC → ROS process → Navigator
 ```
 
----
+## Navigation Engine
 
-## Documentation
+```
+navigate_to_target(target)
+    │
+    ├── Distance fusion: camera (primary) + LiDAR (fallback when bbox clipped)
+    ├── Sensor offset compensation (camera 14cm, LiDAR 5cm from center)
+    │
+    ├── Far (>0.40m): Full VFH navigation with obstacle avoidance
+    │   └── Speed scales with distance, mecanum strafing through gaps
+    │
+    ├── Close (<0.40m): Direct approach at min_speed (0.07 m/s)
+    │   └── Bypasses VFH — bottle IS the obstacle
+    │
+    ├── Arrival (≤0.10m): Multi-signal check (vision + LiDAR + bbox_clipped)
+    │   └── 0.3s temporal confirmation
+    │
+    └── Target lost:
+        ├── <3s: Drift forward at min_speed
+        ├── Close + lost: Blind approach (dead-reckon via TF2 map-frame)
+        └── >3s: Search (360° scan → Archimedean spiral)
+```
 
-| Guide | Description |
-|-------|-------------|
-| [Architecture](docs/ARCHITECTURE.md) | System architecture, block diagrams, design patterns |
-| [How It Works](docs/HOW_IT_WORKS.md) | Complete technical deep-dive: sensing, AI detection, navigation |
-| [GUI Guide](docs/GUI_GUIDE.md) | GUI layout, controls, settings, keyboard shortcuts |
-| [Hardware Setup](docs/HARDWARE_SETUP.md) | Hardware wiring, Arduino protocol, sensor configuration |
-| [API Reference](docs/API_REFERENCE.md) | Module, class, and function reference for developers |
+## Settings (GUI)
 
----
+Only 2 detection sliders (everything else has safe hardcoded defaults):
 
-## Quick Start
+| Setting | Range | Default | Description |
+|---------|-------|---------|-------------|
+| Confidence | 0.05–0.95 | 0.30 | Lower = more detections, more false positives |
+| Detection Memory | 0.3–5.0s | 1.0s | How long to keep a lost detection |
 
-### Prerequisites
+Navigation params tunable in Nav/Search/Blind/Obstacle tabs. Sensor mounting in Setup tab. All auto-saved to `~/.config/bowling_target_nav/calibration.json`.
 
-| Component | Requirement |
-|-----------|-------------|
-| Platform | Renesas RZ/V2N board (Yocto Linux) |
-| ROS2 | Humble Hawksbill |
-| Arduino | Motor controller on `/dev/ttyACM0` (115200 baud) |
-| LiDAR | RPLidar A1 on `/dev/ttyUSB0` |
-| Camera | USB camera on `/dev/video0` (640x480) |
-| Display | HDMI (Wayland/Weston) |
-| Network | WiFi AP at `192.168.50.1` |
+## Key Files
 
-### First-Time Setup (One Command)
+| File | Purpose |
+|------|---------|
+| `nodes/main_gui.py` | Entry point — spawns 3 processes or 3 threads |
+| `threads/ros_node.py` | ROS2 node + 20Hz control loop |
+| `threads/camera_worker.py` | DRP-AI detection + filtering |
+| `nav/navigator.py` | Holonomic nav, VFH, blind approach, spiral search |
+| `nav/target_selector.py` | Pick closest valid detection |
+| `state/detection_store.py` | All tunable params + calibration persistence |
+| `gui/settings_window.py` | 8-tab settings UI |
+| `gui/panels/map_panel.py` | SLAM map + diagnostics rendering |
+| `gui/panels/camera_panel.py` | Camera feed + detection overlay |
+| `ipc/hub.py` | SharedMemory IPC hub |
+| `processes/ros_process.py` | ROS process with inbound/outbound sync |
+| `processes/camera_process.py` | Camera process with settings watcher |
+| `detectors/drp_binary_detector.py` | DRP-AI stream + pipe backends |
+
+## Deploy to V2N
 
 ```bash
-# SSH into V2N
-ssh root@192.168.50.1
+# From PC (use /* glob, NOT trailing /)
+scp -r src/bowling_target_nav/bowling_target_nav/* \
+  root@192.168.50.1:/root/ros2_ws/src/bowling_target_nav/bowling_target_nav/
 
-# Copy package (from PC)
-scp -r bowling_target_nav root@192.168.50.1:~/ros2_ws/src/
+# Clear Python cache on V2N
+ssh root@192.168.50.1 "find /root/ros2_ws -name '__pycache__' -exec rm -rf {} + 2>/dev/null"
 
-# Run setup — builds, installs services, starts GUI
-cd ~/ros2_ws/src/bowling_target_nav/scripts
-./v2n_setup.sh
+# Restart GUI
+ssh root@192.168.50.1 "pkill -f main_gui; pkill -f bringup"
+# Then press the floating launcher button on screen, or:
+ssh root@192.168.50.1 "cd /root/ros2_ws/src/bowling_target_nav/scripts && ./bowling_gui.sh &"
 ```
 
-This single command:
-1. Verifies ROS2 Humble is installed
-2. Builds the package with `colcon build`
-3. Installs a systemd service for auto-start on boot
-4. Starts the fullscreen GUI with SLAM + Camera + Navigation
-
-### Daily Usage
-
-After setup, the robot **starts automatically on boot**. Manual control:
-
-```bash
-./v2n_setup.sh --start    # Start GUI
-./v2n_setup.sh --stop     # Stop everything
-./v2n_setup.sh --status   # Check status
-./v2n_setup.sh --build    # Rebuild package
-```
-
-### Service Commands
-
-```bash
-# Robot hardware (LiDAR, motors, SLAM, odometry)
-systemctl status robot       # Check status
-systemctl restart robot      # Restart
-journalctl -u robot -f       # Live logs
-
-# GUI launcher (Start/Stop GUI floating button)
-systemctl status bowling-launcher
-systemctl restart bowling-launcher
-
-# Remote desktop (web-based at http://192.168.50.1:8080)
-systemctl status remote-desktop
-systemctl restart remote-desktop
-```
-
----
-
-## How It Works (Summary)
-
-```
-Camera (30fps)              LiDAR (10Hz)            Wheel Encoders (20Hz)
-     │                          │                         │
-     ▼                          ▼                         ▼
-YOLO Detection         Cartographer SLAM           Odometry Node
-(DRP-AI Stream/Pipe    (2D occupancy grid)        (odom → base_link TF)
- or ONNX CPU)
-     │                          │                         │
-     └──────────┬───────────────┘                         │
-                ▼                                         │
-        Navigation Engine (20Hz)  ◄────────────────────────┘
-        ├── Vision+LiDAR fusion
-        ├── Holonomic path planning
-        ├── VFH obstacle avoidance
-        ├── 360° odometry-tracked search scan
-        ├── Blind approach (dead-reckoning)
-        └── Multi-signal arrival detection
-                │
-                ▼
-          /cmd_vel (Twist)
-                │
-                ▼
-        Arduino Motor Controller
-        (VEL,vx,vy,wz → 4 mecanum wheels)
-```
-
-The system runs **three threads**:
-1. **GTK Main Thread** (30fps) — Renders GUI, handles user input
-2. **ROS2 Thread** (20Hz) — SLAM/LiDAR callbacks, navigation control loop
-3. **Camera Thread** (~30fps) — Frame capture, async YOLO detection
-
-All threads communicate through a **thread-safe shared state** with RLock and 0.1s timeouts.
-
----
-
-## GUI Controls
-
-| Control | Action |
-|---------|--------|
-| **GO** button / `G` key | Start navigating to detected bowling pin |
-| **STOP** button / `Space` / `S` | Emergency stop |
-| **SETTINGS** button | Open 5-tab parameter tuning window |
-| **QUIT** button / `Q` / `ESC` | Quit application |
-
-The GUI shows:
-- **Left panel**: SLAM map with robot position (green), LiDAR points (red), navigation target (magenta)
-- **Right panel**: Camera feed with YOLO bounding boxes, crosshair on closest pin, distance/angle labels
-- **Status bar**: Color-coded navigation state with speed and obstacle info
-
----
-
-## Navigation States
-
-```
-            ┌────────── STOP pressed ──────────────────┐
-            │                                          │
-            ▼         GO pressed                       │
-      ┌──► IDLE ◄──────────── 360° scan complete        │
-      │     │                                          │
-      │     │ No target visible                        │
-      │     ▼                                          │
-      │  SEARCHING ──── Target found! ──────┐          │
-      │     ▲                               │          │
-      │     │                               ▼          │
-      │  Target lost >3s           NAVIGATING ◄────────┤
-      │  AND far (>0.8m)               │               │
-      │     │                          │               │
-      │     │                 Target lost >3s           │
-      │     │                 AND close (<0.8m)         │
-      │     │                          │               │
-      │     │                          ▼               │
-      │     └─────────────  BLIND_APPROACH             │
-      │                          │                     │
-      │                 Arrived / LiDAR stop            │
-      │                          │                     │
-      │                          ▼                     │
-      └───────────────────  ARRIVED ───────────────────┘
-                         (terminal)
-```
-
----
-
-## Detection Backends
-
-| Backend | Description | Performance | Config Value |
-|---------|-------------|-------------|--------------|
-| **DRP-AI Stream** | C++ owns camera + inference, Python reads via shared memory | ~5-10ms inference, zero-copy frames | `drp_stream` |
-| **DRP-AI Pipe** | Python sends frames to C++ subprocess via stdin/stdout | ~10-20ms inference | `drp_binary` |
-| **YOLO ONNX** | CPU inference (fallback) | ~45ms inference | `yolo_onnx` |
-| **Mock** | Testing without camera | Instant | `mock` |
-
-```bash
-# Switch backend via environment variable
-export V2N_DETECTOR_TYPE=drp_binary
-
-# Or edit config/robot_config.yaml
-```
-
-The system **auto-detects**: tries DRP-AI first (V2N hardware), falls back to ONNX CPU.
-
----
-
-## ROS2 Topics
-
-### Published
-
-| Topic | Type | Source | Purpose |
-|-------|------|--------|---------|
-| `/cmd_vel` | Twist | Navigation engine | Motor velocity commands |
-| `/odom` | Odometry | odometry_node | Wheel encoder odometry |
-| `/target_pose` | PoseStamped | vision_node | Detected pin position |
-| `/target_detection` | String | vision_node | Detection JSON metadata |
-| `/arduino/status` | String | arduino_driver | Connection status |
-| `/arduino/odom_raw` | String | arduino_driver | Raw encoder telemetry |
-| `/diagnostics` | DiagnosticArray | arduino_driver | System health |
-
-### Subscribed
-
-| Topic | Type | Consumer | Purpose |
-|-------|------|----------|---------|
-| `/cmd_vel` | Twist | arduino_driver | Motor control |
-| `/scan` | LaserScan | Navigation, SLAM | LiDAR obstacle data |
-| `/map` | OccupancyGrid | GUI, navigation | SLAM map |
-| `/target_pose` | PoseStamped | target_follower | Pin position |
-| `/gui/command` | String | MainGuiNode | GUI command dispatch |
-
-### TF Frames
+## TF Tree
 
 ```
 map ──► odom ──► base_link ──► laser
-   (SLAM)  (encoders)     ├──► camera_link
-                          └──► wheel_fl/fr/rl/rr
+  │       │           ├──► camera_link
+  │       │           └──► wheels
+  │       └── odometry_node (encoder ticks)
+  └── cartographer (SLAM)
 ```
 
----
+**Critical**: Cartographer must use `provide_odom_frame=false` + `published_frame="odom"` since odometry_node already publishes `odom→base_link`. Constraint builder disabled on V2N aarch64 to prevent mutex deadlock.
 
-## PC Remote Control
+## ROS2 Topics
 
-Control the robot wirelessly from your PC:
-
-```bash
-# Connect to V2N WiFi, then:
-cd tools/
-python3 pc_robot_controller.py
-```
-
-**Controls**: WASD movement, Q/E rotation, Space stop, speed sliders.
-
----
-
-## Project Structure
-
-```
-bowling_target_nav/
-├── bowling_target_nav/           # Main Python package
-│   ├── nodes/                    # 9 ROS2 entry points
-│   │   └── main_gui.py          #   Primary: 3-thread GUI application
-│   ├── state/                    # Thread-safe shared state (Singleton + Facade)
-│   │   ├── shared_state.py      #   Composes 3 domain stores
-│   │   ├── sensor_store.py      #   Map, pose, laser
-│   │   ├── detection_store.py   #   Camera, detections, tunable params
-│   │   └── nav_store.py         #   Nav state, commands, obstacles
-│   ├── nav/                      # Navigation algorithms
-│   │   ├── navigator.py         #   Holonomic drive, blind approach, obstacles
-│   │   └── target_selector.py   #   Closest pin selection
-│   ├── threads/                  # Worker threads
-│   │   ├── ros_node.py          #   ROS2 node + 20Hz control loop
-│   │   └── camera_worker.py     #   Camera + async YOLO detection
-│   ├── gui/                      # GTK3 interface
-│   │   ├── main_window.py       #   Fullscreen window
-│   │   ├── settings_window.py   #   5-tab parameter tuning
-│   │   └── panels/              #   Map and camera renderers
-│   ├── detectors/                # AI backends (Strategy pattern)
-│   │   ├── base.py              #   DetectorBase ABC
-│   │   ├── yolo_onnx_detector.py#   ONNX Runtime CPU
-│   │   └── drp_binary_detector.py#  DRP-AI hardware
-│   ├── hardware/                 # Hardware abstractions (Factory pattern)
-│   │   ├── arduino.py           #   Motor control + encoders
-│   │   ├── camera.py            #   Camera capture
-│   │   └── lidar.py             #   LiDAR bridge
-│   └── utils/
-│       └── distance_estimator.py #  Bbox size → distance
-├── config/                       # YAML + Lua configuration
-├── launch/                       # 7 ROS2 launch files
-├── models/                       # YOLO ONNX models
-├── scripts/                      # Setup and service scripts
-├── tools/                        # PC remote control
-├── test/                         # Unit + integration tests
-├── urdf/                         # Robot description (TF frames)
-└── docs/                         # Documentation
-```
-
----
-
-## Testing
-
-```bash
-cd scripts/
-./run_tests.sh              # All tests
-./run_tests.sh arduino      # Arduino motor tests
-./run_tests.sh lidar        # LiDAR sensor tests
-./run_tests.sh camera       # Camera + YOLO tests
-./run_tests.sh integration  # Sensor fusion tests
-./run_tests.sh system       # Full system tests
-./run_tests.sh --check      # Check hardware availability
-```
-
-### Interactive Test GUIs
-
-```bash
-./run_tests.sh --gui                # Full system control
-./run_tests.sh --visualize-lidar    # LiDAR visualization
-./run_tests.sh --visualize-camera   # Camera detection demo
-./run_tests.sh --visualize-fusion   # Sensor fusion view
-```
-
----
-
-## Network
-
-| Host | IP | Access |
-|------|-----|--------|
-| V2N Robot | `192.168.50.1` | `ssh root@192.168.50.1` |
-
----
-
-## Troubleshooting
-
-### Hardware Check
-
-```bash
-ls -la /dev/ttyACM0 /dev/ttyUSB0 /dev/video0
-```
-
-### Robot Not Responding
-
-```bash
-./v2n_setup.sh --stop && ./v2n_setup.sh --start
-```
-
-### GUI Not Starting
-
-```bash
-journalctl -u robot -n 50    # Check logs
-echo $WAYLAND_DISPLAY        # Should be "wayland-0"
-echo $XDG_RUNTIME_DIR        # Should be "/run"
-```
-
-### Rebuild
-
-```bash
-./v2n_setup.sh --build
-```
-
----
+| Topic | Type | Direction | Purpose |
+|-------|------|-----------|---------|
+| `/cmd_vel` | Twist | Publish | Motor velocity |
+| `/scan` | LaserScan | Subscribe | LiDAR points |
+| `/map` | OccupancyGrid | Subscribe | SLAM grid |
+| `/odom` | Odometry | Subscribe (via TF) | Robot pose |
+| `/gui/command` | String | Subscribe | Remote GO/STOP |
+| `/arduino/cmd` | String | Publish | Motor calibration |
 
 ## License
 

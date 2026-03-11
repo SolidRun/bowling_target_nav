@@ -38,12 +38,12 @@ def generate_launch_description():
         description='Enable Cartographer SLAM mapping')
 
     linear_speed_arg = DeclareLaunchArgument(
-        'linear_speed', default_value='0.18',
+        'linear_speed', default_value='0.10',
         description='Wander forward speed (m/s)')
 
     target_class_arg = DeclareLaunchArgument(
-        'target_class', default_value='bowling-pins',
-        description='Object class to track')
+        'target_class', default_value='bottle',
+        description='Object class to detect (must match YOLO model class)')
 
     detector_type_arg = DeclareLaunchArgument(
         'detector_type', default_value='yolo',
@@ -64,7 +64,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('use_slam'))
     )
 
-    # --- 3. Vision Node (camera + bowling-pins ONLY detection + video) ---
+    # --- 3. Vision Node (camera + target detection + video) ---
     vision_node = Node(
         package='bowling_target_nav',
         executable='vision_node',

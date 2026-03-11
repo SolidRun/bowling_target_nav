@@ -2,22 +2,34 @@
 DRP-AI Detectors
 ================
 
-Object detection using V2N DRP-AI hardware accelerator via C++ subprocess.
+Object detection using the V2N DRP-AI hardware accelerator via a persistent
+C++ subprocess (yolo_detection binary).
 
-Two modes:
-  - Pipe mode:   Python sends BGR frames via stdin, reads JSON from stdout.
-  - Stream mode: C++ owns camera, writes frames to shared memory,
-                 writes JSON detections to stdout. Much faster.
+Two detector classes are provided:
 
-Protocol (pipe mode):
-    Python → C++ stdin:  [uint32 width][uint32 height][BGR pixel bytes]
-    C++ stdout → Python: {"detections":[...],"inference_ms":float}\\n
-    Startup:             C++ writes "READY\\n" when model is loaded
+DrpBinaryDetector (pipe mode):
+    Python owns the camera, sends BGR frames to the C++ binary via stdin,
+    and reads JSON detection results from stdout. Suitable when Python needs
+    direct camera access (e.g., for frame annotation before display).
 
-Protocol (stream mode):
-    C++ stdout → Python: {"detections":[...],"inference_ms":float}\\n
-    C++ → /dev/shm/v2n_camera: [uint32 w][uint32 h][uint64 seq][uint64 ts][BGR data]
-    Startup:             C++ writes "READY\\n" when model is loaded
+    Protocol:
+      Python -> C++ stdin:  [uint32 width][uint32 height][BGR pixel bytes]
+      C++ stdout -> Python: {"detections":[...],"inference_ms":float}\\n
+      Startup:              C++ writes "READY\\n" when model is loaded
+
+DrpStreamDetector (stream mode):
+    C++ owns the camera and runs multi-threaded capture + inference.
+    Frames are written to /dev/shm/v2n_camera (zero-copy mmap read by Python).
+    Detection JSON is streamed on stdout. This eliminates the ~921KB per-frame
+    pipe transfer and is roughly 10x faster than pipe mode.
+
+    Protocol:
+      C++ stdout -> Python: {"detections":[...],"inference_ms":float}\\n
+      C++ -> /dev/shm/v2n_camera: [uint32 w][uint32 h][uint64 seq][uint64 ts][BGR data]
+      Startup:              C++ writes "READY\\n" when model is loaded
+
+Helper functions find_drp_binary() and find_drp_model() search standard
+V2N filesystem paths for the detection binary and model directory.
 """
 
 import json
@@ -98,11 +110,22 @@ class DrpBinaryDetector(DetectorBase):
         binary_path: Optional[str] = None,
         model_dir: Optional[str] = None,
         confidence_threshold: float = 0.5,
-        target_class: str = "bowling-pins",
+        target_class: str = "bottle",
         class_names: Optional[List[str]] = None,
         startup_timeout: float = 30.0,
         **kwargs
     ):
+        """Initialize the DRP-AI pipe detector.
+
+        Args:
+            binary_path: Path to yolo_detection binary. Auto-detected if None.
+            model_dir: Path to DRP-AI model directory. Auto-detected if None.
+            confidence_threshold: Minimum confidence to keep a detection.
+            target_class: Primary target class name for detect_target().
+            class_names: List of class names indexed by class_id.
+            startup_timeout: Seconds to wait for C++ READY signal.
+            **kwargs: Passed to DetectorBase.
+        """
         super().__init__(
             confidence_threshold=confidence_threshold,
             target_class=target_class,
@@ -111,7 +134,7 @@ class DrpBinaryDetector(DetectorBase):
 
         self.binary_path = binary_path or find_drp_binary()
         self.model_dir = model_dir or find_drp_model()
-        self.class_names = class_names or ["bowling-pins"]
+        self.class_names = class_names or [target_class]
         self.startup_timeout = startup_timeout
         self._proc = None
 
@@ -195,7 +218,14 @@ class DrpBinaryDetector(DetectorBase):
             f"DRP-AI subprocess did not become ready within {self.startup_timeout}s")
 
     def _detect_impl(self, frame: np.ndarray) -> DetectionResult:
-        """Send frame to DRP-AI subprocess, receive JSON detections."""
+        """Send a BGR frame to the DRP-AI subprocess and parse JSON detections.
+
+        Args:
+            frame: Input image as numpy array (BGR, HxWx3).
+
+        Returns:
+            DetectionResult with parsed detections or error status.
+        """
         if self._proc is None or self._proc.poll() is not None:
             return DetectionResult(
                 success=False,
@@ -318,9 +348,18 @@ class DrpStreamDetector:
         class_names: Optional[List[str]] = None,
         startup_timeout: float = 30.0,
     ):
+        """Initialize the DRP-AI stream detector.
+
+        Args:
+            binary_path: Path to yolo_detection binary. Auto-detected if None.
+            model_dir: Path to DRP-AI model directory. Auto-detected if None.
+            confidence_threshold: Minimum confidence for detections.
+            class_names: List of class names indexed by class_id.
+            startup_timeout: Seconds to wait for C++ READY signal.
+        """
         self.binary_path = binary_path or find_drp_binary()
         self.model_dir = model_dir or find_drp_model()
-        self.class_names = class_names or ["bowling-pins"]
+        self.class_names = class_names or ["bottle"]  # DrpStreamDetector default
         self.confidence_threshold = confidence_threshold
         self.startup_timeout = startup_timeout
         self._proc = None
@@ -428,7 +467,12 @@ class DrpStreamDetector:
         logger.info("JSON reader thread stopped")
 
     def get_frame(self) -> Optional[np.ndarray]:
-        """Read latest camera frame from shared memory. Returns BGR numpy array."""
+        """Read the latest camera frame from shared memory via mmap.
+
+        Returns:
+            BGR numpy array (HxWx3) if a new frame is available, None otherwise.
+            Returns None if the sequence number has not advanced since last call.
+        """
         if self._shm is None:
             return None
         try:
@@ -439,19 +483,27 @@ class DrpStreamDetector:
             w, h, seq, ts = struct.unpack('<IIqq', header)
             if w == 0 or h == 0 or seq == 0:
                 return None
+            # Reject unreasonable dimensions (max 2048x2048)
+            if w > 2048 or h > 2048:
+                return None
             if seq == self._last_seq:
                 return None  # No new frame
             self._last_seq = seq
             nbytes = w * h * 3
             data = self._shm.read(nbytes)
-            if len(data) < nbytes:
+            if len(data) != nbytes:
                 return None
             return np.frombuffer(data, dtype=np.uint8).reshape(h, w, 3).copy()
         except Exception:
             return None
 
     def get_detections(self) -> Tuple[List[dict], float]:
-        """Get latest detections and inference time."""
+        """Get latest detections and inference time from the JSON reader thread.
+
+        Returns:
+            Tuple of (detections list, inference_time_ms). The detections list
+            is a copy so callers can mutate it safely.
+        """
         with self._lock:
             return self._latest_detections[:], self._latest_infer_ms
 

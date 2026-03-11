@@ -69,7 +69,7 @@ def generate_launch_description():
         parameters=[
             {'use_sim_time': False},
             {'resolution': 0.05},
-            {'publish_period_sec': 1.0}
+            {'publish_period_sec': 0.2}
         ]
     )
 

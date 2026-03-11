@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Vision Detection Node for Bowling Target Navigation
+Vision Detection Node for Target Navigation
 ====================================================
 
 ROS2 node that captures camera frames, runs object detection,
@@ -19,7 +19,7 @@ Parameters:
     model_path: Path to ONNX model (for YOLO)
     binary_path: Path to binary app (for binary detector)
     camera_index: Camera device index (default 0)
-    target_class: Class name to track (default "Pins")
+    target_class: Class name to track (default from config)
     conf_threshold: Minimum confidence (default 0.3)
     reference_box_height: Box height at reference distance (calibration)
     reference_distance: Reference distance in meters (calibration)
@@ -72,8 +72,10 @@ class VisionNode(Node):
         self.declare_parameter('model_path', '')
         self.declare_parameter('binary_path', '')
         self.declare_parameter('camera_index', 0)
-        self.declare_parameter('target_class', 'bowling-pins')
-        self.declare_parameter('filter_classes', ['bowling-pins', 'Bowlingpin-bowlingball'])
+        from bowling_target_nav.core.config import get_config
+        _tcfg = get_config().detection.target
+        self.declare_parameter('target_class', _tcfg.class_name)
+        self.declare_parameter('filter_classes', _tcfg.filter_classes)
         self.declare_parameter('conf_threshold', 0.5)
         self.declare_parameter('reference_box_height', 200.0)
         self.declare_parameter('reference_distance', 1.0)
@@ -140,7 +142,7 @@ class VisionNode(Node):
         self.cap = self._init_camera()
 
         # Publishers
-        qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 
         self.pose_pub = self.create_publisher(PoseStamped, '/target_pose', qos)
         self.detection_pub = self.create_publisher(String, '/target_detection', qos)

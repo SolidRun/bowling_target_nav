@@ -1,8 +1,8 @@
 """
-Bowling Target Navigation Package
-=================================
+Target Navigation Package
+=========================
 
-Autonomous bowling pin detection and navigation for the RZ/V2N robot.
+Autonomous target detection and navigation for the RZ/V2N robot.
 Uses SLAM mapping, YOLO AI detection, and mecanum holonomic drive.
 
 Subpackages:

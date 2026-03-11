@@ -2,7 +2,19 @@
 Event System
 ============
 
-Provides a publish-subscribe event system for loose coupling between components.
+Provides a thread-safe publish-subscribe event bus for loose coupling
+between components.
+
+Key classes:
+    - ``EventType`` -- enum of all standard event categories (detection,
+      navigation, hardware, system).
+    - ``Event`` -- immutable data container carrying type, payload dict,
+      timestamp, and source tag.
+    - ``EventBus`` -- singleton hub where publishers call ``publish()``
+      and subscribers register via ``subscribe()`` / ``subscribe_all()``.
+
+The bus is used in the single-process (threading) mode.  In multiprocess
+mode, IPC channels replace the event bus for cross-process communication.
 """
 
 import logging

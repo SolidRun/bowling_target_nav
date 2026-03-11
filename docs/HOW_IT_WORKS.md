@@ -1,6 +1,6 @@
-# How the V2N Bowling Robot Works
+# How the V2N Bottle Robot Works
 
-A complete technical guide to the bowling pin navigation robot — from hardware to AI to autonomous navigation.
+A complete technical guide to the bottle navigation robot — from hardware to AI to autonomous navigation.
 
 ---
 
@@ -13,7 +13,7 @@ A complete technical guide to the bowling pin navigation robot — from hardware
    - [Wheel Odometry — Knowing Where the Robot Is](#3b-wheel-odometry--knowing-where-the-robot-is)
    - [SLAM Mapping — Building a Map While Moving](#3c-slam-mapping--building-a-map-while-moving)
    - [Robot Pose — The TF Chain](#3d-robot-pose--the-tf-chain)
-4. [How AI Pin Detection Works](#4-how-ai-pin-detection-works)
+4. [How AI Bottle Detection Works](#4-how-ai-bottle-detection-works)
    - [Camera Thread Architecture](#4a-camera-thread-architecture)
    - [Detection Pipeline — Two Backends](#4b-detection-pipeline--two-backends)
    - [Distance and Angle Estimation](#4c-distance--angle-estimation)
@@ -22,7 +22,7 @@ A complete technical guide to the bowling pin navigation robot — from hardware
    - [State Machine](#5b-state-machine)
 6. [How the Robot Actually Moves](#6-how-the-robot-actually-moves)
    - [Navigation Algorithm](#6a-navigation-algorithm)
-   - [Arrival Detection](#6b-arrival-detection--how-the-robot-knows-it-reached-the-pin)
+   - [Arrival Detection](#6b-arrival-detection--how-the-robot-knows-it-reached-the-bottle)
    - [Obstacle Avoidance](#6c-obstacle-avoidance)
    - [Blind Approach](#6d-blind-approach)
    - [From Twist to Wheels](#6e-from-twist-to-wheels)
@@ -69,7 +69,7 @@ A complete technical guide to the bowling pin navigation robot — from hardware
 |-----------|--------|------------|---------|
 | **RZ/V2N Board** | Renesas RZ/V2N SoC | — | Main computer: ARM64 CPU + DRP-AI neural accelerator |
 | **RPLidar A1** | Slamtec laser scanner | `/dev/ttyUSB0` | 360° distance scanning, 8KHz, 6m range (up to 12m for reflective targets) |
-| **USB Camera** | Generic V4L2 camera | `/dev/video0` | 640×480 RGB, front-facing for pin detection |
+| **USB Camera** | Generic V4L2 camera | `/dev/video0` | 640×480 RGB, front-facing for bottle detection |
 | **Arduino Mega** | ATmega2560 | `/dev/ttyACM0` at 115200 baud | Motor control via PCA9685 I2C PWM board |
 | **Motor Shield** | QGPMaker PCA9685 | I2C address 0x60 | Drives 4 TB67H450 H-bridges |
 | **Mecanum Wheels** | 4× omnidirectional | — | Holonomic movement (forward, sideways, diagonal, spin) |
@@ -307,7 +307,7 @@ This gives the robot's drift-corrected position by combining:
 
 ---
 
-## 4. How AI Pin Detection Works
+## 4. How AI Bottle Detection Works
 
 ### 4a. Camera Thread Architecture
 
@@ -397,7 +397,7 @@ ONNX Runtime Inference (CPU)
 Postprocess:
     Parse output tensor (YOLOv8 format: [1, 8, 2100])
     Filter by confidence threshold (> 0.35)
-    Filter by class name ("bowling-pins")
+    Filter by class name ("bottle")
     Apply NMS (Non-Maximum Suppression)
     Scale boxes back to original frame size
     │
@@ -407,11 +407,11 @@ List[Detection(class_name, confidence, bbox)]
 
 **What is NMS (Non-Maximum Suppression)?**
 
-YOLO often produces multiple overlapping detections for the same object. NMS keeps only the highest-confidence box and removes boxes that overlap it by more than 45% (IoU threshold). This ensures each pin gets exactly one detection.
+YOLO often produces multiple overlapping detections for the same object. NMS keeps only the highest-confidence box and removes boxes that overlap it by more than 45% (IoU threshold). This ensures each bottle gets exactly one detection.
 
 ### 4c. Distance & Angle Estimation
 
-Once we have a bounding box, we estimate how far away the pin is and at what angle.
+Once we have a bounding box, we estimate how far away the bottle is and at what angle.
 
 ```
                         Camera Frame (640×480)
@@ -419,7 +419,7 @@ Once we have a bounding box, we estimate how far away the pin is and at what ang
                        │                              │
                        │         ┌────────┐           │
                        │         │        │           │
-                       │         │  Pin   │ height    │
+                       │         │ Bottle │ height    │
                        │         │  bbox  │ = h px    │
                        │         │        │           │
                        │         └────────┘           │
@@ -439,10 +439,23 @@ distance = reference_distance × (reference_box_height / current_box_height)
 ```
 
 - Calibration default: 100px box height at 1.0m distance
-- If the pin appears 200px tall → it's at 0.5m (closer = bigger)
-- If the pin appears 50px tall → it's at 2.0m (farther = smaller)
+- If the bottle appears 200px tall → it's at 0.5m (closer = bigger)
+- If the bottle appears 50px tall → it's at 2.0m (farther = smaller)
 
-The Settings GUI has a calibration tool: place a pin at a known distance, press CALIBRATE, and it updates the reference values.
+The Settings GUI has a calibration tool: place a bottle at a known distance, press CALIBRATE, and it updates the reference values. Calibration is auto-saved to `~/.config/bowling_target_nav/calibration.json` and persists across restarts.
+
+**Sensor Offset Compensation:**
+
+The camera is not at the robot center — it's mounted 12cm forward. The estimated distance is from the camera lens, but navigation needs the distance from a consistent reference point. The system supports configurable reference points:
+
+| Reference Point | Offset Applied | Use Case |
+|----------------|---------------|----------|
+| `center` | Subtract camera X offset | Distance from robot center |
+| `front` | Subtract (camera X - robot length/2) | Distance from robot front edge |
+| `camera` | No offset (raw) | Distance from camera lens |
+| `lidar` | Adjust for LiDAR position | Distance from LiDAR sensor |
+
+The reference point is configurable in the Setup tab of Settings.
 
 **Angle formula:**
 
@@ -456,9 +469,9 @@ offset_x = detection_center_x - 320    (pixels from frame center)
 angle = atan2(offset_x, focal_length)   (radians)
 ```
 
-- Pin in the center → angle ≈ 0°
-- Pin on the right edge → angle ≈ +30°
-- Pin on the left edge → angle ≈ -30°
+- Bottle in the center → angle ≈ 0°
+- Bottle on the right edge → angle ≈ +30°
+- Bottle on the left edge → angle ≈ -30°
 
 **LiDAR+Vision Fusion:**
 
@@ -505,7 +518,7 @@ control_loop() — runs every 50ms in ros_node.py
 │  Step 3: Find best target                                        │
 │  ┌─────────────────────────────────────────┐                     │
 │  │ find_best_target(detections)            │                     │
-│  │ → picks the closest pin by distance     │                     │
+│  │ → picks the closest bottle by distance   │                     │
 │  └─────────────────────────────────────────┘                     │
 │                                                                  │
 │  Step 4: Navigate based on target visibility                     │
@@ -535,7 +548,7 @@ control_loop() — runs every 50ms in ros_node.py
 
 ### 5b. State Machine
 
-The navigation system has 5 states:
+The navigation system has 6 states:
 
 ```
                     ┌─────── STOP pressed ──────────────────────┐
@@ -552,7 +565,7 @@ The navigation system has 5 states:
               │  AND far (>0.8m)                  │             │
               │     │                             │             │
               │     │                    Target lost >3s        │
-              │     │                    AND close (<0.8m)      │
+              │     │                    AND close (<0.37m)     │
               │     │                             │             │
               │     │                             ▼             │
               │     └──────────────── BLIND_APPROACH            │
@@ -564,6 +577,11 @@ The navigation system has 5 states:
                                     (terminal state)
                                    User presses GO
                                    to restart
+
+    SEARCHING ─── 360° done, no target ──► SPIRAL_SEARCH
+                                               │
+                                          Target found → NAVIGATING
+                                          Timeout → IDLE
 ```
 
 **State descriptions:**
@@ -571,9 +589,10 @@ The navigation system has 5 states:
 | State | Color | What's Happening |
 |-------|-------|------------------|
 | **IDLE** | Gray | Waiting for user to press GO |
-| **SEARCHING** | Yellow | 360° odometry-tracked scan looking for pins (stops after full rotation) |
-| **NAVIGATING** | Green | Driving toward a visible pin |
-| **BLIND_APPROACH** | Orange | Dead-reckoning to last known pin position (camera lost it) |
+| **SEARCHING** | Yellow | 360° odometry-tracked scan looking for bottles (stops after full rotation) |
+| **SPIRAL_SEARCH** | Orange | Expanding spiral outward looking for bottles (after 360° scan fails) |
+| **NAVIGATING** | Green | Driving toward a visible bottle |
+| **BLIND_APPROACH** | Orange | Dead-reckoning to last known bottle position (camera lost it) |
 | **ARRIVED** | Blue | Reached the target. Stopped. Terminal — press GO to restart. |
 
 ---
@@ -582,7 +601,7 @@ The navigation system has 5 states:
 
 ### 6a. Navigation Algorithm
 
-When a pin is detected, the navigator computes a **holonomic velocity command** to drive toward it:
+When a bottle is detected, the navigator computes a **holonomic velocity command** to drive toward it:
 
 ```python
 # In navigator.py direct_navigate():
@@ -610,28 +629,28 @@ if total_speed > 0 and total_speed < min_linear_speed:
 
 **Example scenarios:**
 
-| Pin Position | linear.x | linear.y | Result |
+| Bottle Position | linear.x | linear.y | Result |
 |-------------|----------|----------|--------|
 | Directly ahead, 1m | 0.15 | 0.00 | Drive straight forward |
 | 30° to the right, 1m | 0.13 | -0.075 | Drive forward-right diagonally |
 | 45° to the left, 0.5m | 0.07 | 0.07 | Strafe diagonally forward-left |
 | Directly left, 0.3m | 0.00 | 0.10 | Pure sideways strafe |
 
-### 6b. Arrival Detection — How the Robot Knows It Reached the Pin
+### 6b. Arrival Detection — How the Robot Knows It Reached the Bottle
 
 Determining "I have arrived" is harder than it sounds. The robot uses **multi-signal arrival detection** with temporal confirmation to avoid both false arrivals and missed arrivals.
 
 **The problem with simple distance checks:**
 
-A single distance measurement is noisy. Vision distance (based on bounding box height) can fluctuate by 5cm frame-to-frame. A single bad reading of 0.14m could trigger a false arrival, while a reading of 0.16m would miss a real arrival. Additionally, when the pin is very close, the bounding box gets clipped at the frame edge, making the height measurement unreliable.
+A single distance measurement is noisy. Vision distance (based on bounding box height) can fluctuate by 5cm frame-to-frame. A single bad reading of 0.14m could trigger a false arrival, while a reading of 0.16m would miss a real arrival. Additionally, when the bottle is very close, the bounding box gets clipped at the frame edge, making the height measurement unreliable.
 
 **Three independent arrival signals:**
 
 ```
 Signal 1: Fused Distance            Signal 2: LiDAR Frontal         Signal 3: LiDAR at Target Angle
-(vision or LiDAR)                   (any obstacle in front)         (obstacle in pin's direction)
+(vision or LiDAR)                   (any obstacle in front)         (obstacle in bottle's direction)
 
-  Pin ← 0.12m → Robot                    ▓ 0.10m                       ↗ beam hits pin
+  Bottle ← 0.12m → Robot                 ▓ 0.10m                       ↗ beam hits bottle
   distance < 0.15m?                  ████████████                      at < 0.15m?
                                     ████ Robot ████
                                     ████████████
@@ -671,8 +690,8 @@ navigate_to_target() called at 20Hz
 | **Confirmation time** | 0.3s (6 ticks at 20Hz) | Filters single-frame noise without perceptible delay |
 | **Hysteresis** | 1.5× threshold | Timer resets only when distance > 0.225m, preventing oscillation near 0.15m |
 | **Creep during confirmation** | 50% of min speed | Robot still moves toward target during 0.3s, covering ~1.5cm — well within margin |
-| **Bbox clipping margin** | 5px from frame edge | Pin touching frame border = height is underestimated = distance overestimated |
-| **Emergency LiDAR stop** | 0.12m front + any close signal | Catches "pin right in front" even when vision is confused |
+| **Bbox clipping margin** | 5px from frame edge | Bottle touching frame border = height is underestimated = distance overestimated |
+| **Emergency LiDAR stop** | 0.12m front + any close signal | Catches "bottle right in front" even when vision is confused |
 
 ### 6c. Obstacle Avoidance
 
@@ -724,7 +743,7 @@ else:
 
 ### 6d. Blind Approach
 
-When the robot is close to a pin (<0.8m) but the camera loses it (pin exits the field of view, or detection fails), the robot enters **blind approach** mode:
+When the robot is close to a bottle (<0.8m) but the camera loses it (bottle exits the field of view, or detection fails), the robot enters **blind approach** mode:
 
 ```
 Step 1: Save target position in map frame
@@ -742,7 +761,7 @@ Step 2: Dead-reckon toward saved position
         └──────────────────────────────────────┘
 
 Exit conditions:
-  ✅ remaining < 0.10m        → ARRIVED (reached the pin!)
+  ✅ remaining < 0.10m        → ARRIVED (reached the bottle!)
   ✅ LiDAR front < 0.12m      → ARRIVED (bumped into something)
   ❌ heading error > 45°       → ABORT → SEARCHING (lost track)
   ❌ timeout > 8s              → ABORT → SEARCHING
@@ -751,7 +770,7 @@ Exit conditions:
 
 **Why blind approach exists:**
 
-When the robot gets very close, the pin often exits the camera's field of view (the camera can't see straight down). Without blind approach, the robot would stop and start searching — spinning around looking for a pin that's right in front of it. Blind approach uses the last known position and wheel odometry to finish the approach.
+When the robot gets very close, the bottle often exits the camera's field of view (the camera can't see straight down). Without blind approach, the robot would stop and start searching — spinning around looking for a bottle that's right in front of it. Blind approach uses the last known position and wheel odometry to finish the approach.
 
 ### 6e. From Twist to Wheels
 
@@ -986,7 +1005,7 @@ SharedState (singleton — one instance shared by all threads)
 
 ### 7d. Complete Data Flow — One Navigation Cycle
 
-Here is what happens in one 50ms cycle when the robot is navigating toward a pin:
+Here is what happens in one 50ms cycle when the robot is navigating toward a bottle:
 
 ```
 Time 0ms:   LiDAR completes a 360° scan
@@ -1020,7 +1039,7 @@ Time 20ms:  ros_node.py map_cb fires:
 
 Time 25ms:  ros_node.py control_loop fires:
             - Reads state.detection.get_camera() → gets latest detections
-            - find_best_target() → closest pin at 0.85m, 5° right
+            - find_best_target() → closest bottle at 0.85m, 5° right
             - navigator.navigate_to_target(target)
               ├── LiDAR fusion: check lidar distance at 5° → 0.82m (use this)
               ├── check_obstacles(): no obstacle ahead
@@ -1033,13 +1052,13 @@ Time 28ms:  arduino_driver_node receives /cmd_vel
             Sends serial command to Arduino
 
 Time 30ms:  Arduino sets PWM on PCA9685 motor shield
-            All 4 motors adjust speed → robot moves toward pin
+            All 4 motors adjust speed → robot moves toward bottle
 
 Time 33ms:  GTK main thread timer fires:
             - state.nav.get_gui_snapshot() → read nav state
             - Update status bar: "● NAVIGATING | Target: 0.82m | 0.14 m/s"
             - queue_draw() → triggers on_draw():
-              ├── draw_map_panel(): SLAM map + robot dot + laser + target diamond
+              ├── draw_map_panel(): SLAM map + robot + color-coded laser + target + diagnostics
               └── draw_camera_panel(): camera frame + crosshair + state badge
 
 Time 50ms:  Next control_loop iteration begins...
@@ -1060,11 +1079,11 @@ The GUI is a fullscreen GTK3 window rendered on the robot's MIPI-DSI display via
 │                              │                    └───────────┘  │
 │       ·····•                 │   ┌──────────────┐                │
 │       ·   /●                 │   │    ◎────┐    │   v=0.14 m/s  │
-│       · free  wall           │   │    │Pin │    │   ω=2°/s      │
+│       · free  wall           │   │    │Btl │    │   ω=2°/s      │
 │       ·    ◇ target          │   │    └────┘    │                │
 │       ·                      │   │   0.82m  5°  │                │
 │                              │   └──────────────┘                │
-│   Robot: (1.2, 0.5) 45°     │   Detection: Pin 0.82m, 5°        │
+│   Robot: (1.2, 0.5) 45°     │   Detection: Bottle 0.82m, 5°      │
 ├──────────────────────────────┴───────────────────────────────────┤
 │ [GO TO TARGET]  [STOP]    ● NAVIGATING | 0.82m | 0.14 m/s       │
 │                                            [SETTINGS]  [QUIT]    │
@@ -1079,7 +1098,7 @@ The GUI is a fullscreen GTK3 window rendered on the robot's MIPI-DSI display via
 | Medium gray cells | (50,50,50) | Free space (no obstacle) |
 | Yellow cells | (0,200,255) | Occupied (walls, objects) |
 | Green circle + arrow | (0,255,0) | Robot position and heading |
-| Red dots | (0,0,255) | Current LiDAR scan points |
+| Green/Red/Orange dots | Color-coded | LiDAR scan: green=match, red=mismatch, orange=unmapped |
 | Pink diamond + line | (255,0,255) | Navigation target and path |
 | Gray grid lines | (60,60,60) | 1-meter reference grid |
 
@@ -1090,7 +1109,7 @@ The GUI is a fullscreen GTK3 window rendered on the robot's MIPI-DSI display via
 | Camera image | Live 640×480 feed |
 | Green bounding boxes | Fresh detections (<0.3s old) |
 | Yellow bounding boxes | Cached detections (0.3-1.5s old) |
-| Green crosshair circle | Aimed at closest pin |
+| Green crosshair circle | Aimed at closest bottle |
 | Distance/angle label | "0.82m 5°" next to crosshair |
 | State badge (top-right) | Current nav state with color |
 | Speed indicator (bottom-left) | "v=0.14 m/s ω=2°/s" |
@@ -1106,17 +1125,20 @@ Color-coded with Pango markup:
 - ⚪ **IDLE** — Gray, "Press GO to start"
 - 🔴 **OBS** — Red obstacle warning with distance
 
-### Settings Window (5 tabs)
+### Settings Window (8 tabs, auto-save)
 
 | Tab | Parameters |
 |-----|-----------|
-| **Navigation** | Linear speed (0.05-0.30 m/s), Min speed, Angular speed, Approach distance, Lost timeout, Search timeout, Search angular speed |
-| **Blind Approach** | Entry distance, Approach speed, Timeout, LiDAR stop distance, Arrival margin |
+| **Navigation** | Linear speed, Min speed, Angular speed, Approach distance, Lost timeout |
+| **Search** | Search timeout, Search angular speed, Spiral search toggle + 6 spiral params |
+| **Blind** | Entry distance, Approach speed, Timeout, LiDAR stop distance, Arrival margin |
 | **Detection** | Confidence threshold (0.10-0.90), Detection interval (0.5-5.0s), Detection expiry (0.5-5.0s) |
 | **Obstacle** | Stop distance, Slowdown distance, Robot half-width |
-| **Calibration** | Distance calibration (place pin, enter distance, press CALIBRATE), Motor test (6 direction buttons), Odometry reset |
+| **Map** | Map rotation (-180°–180°), Robot marker size, Arrow length, Laser point size, Show/hide toggles for grid/laser/nav target |
+| **Setup** | Distance calibration, Sensor positions (camera/LiDAR offsets), Robot dimensions, Motor test (6 directions), Odometry reset |
+| **Tools** | Arduino motor calibration (CALIB/SYNC/READ/RESET via `/arduino/cmd`), Reset all defaults |
 
-All slider changes take effect **immediately** — they write directly to the Navigator object's attributes.
+All slider changes take effect **immediately** and are **auto-saved** to `~/.config/bowling_target_nav/calibration.json` after 2 seconds of inactivity (debounced). All 21 navigation params, 7 map params, sensor positions, and calibration survive restarts.
 
 ---
 
@@ -1133,12 +1155,12 @@ bowling_target_nav/
 │   ├── __init__.py              # Singleton: state = SharedState()
 │   ├── shared_state.py          # Facade: composes stores + lifecycle
 │   ├── sensor_store.py          # Map, pose, laser data
-│   ├── detection_store.py       # Camera frames, detections, params
+│   ├── detection_store.py       # Camera frames, detections, params, persistence
 │   └── nav_store.py             # Nav state, commands, obstacles
 │
 ├── nav/                          # Navigation algorithms
 │   ├── navigator.py             # Direct nav, blind approach, obstacles
-│   └── target_selector.py      # find_best_target() — closest pin
+│   └── target_selector.py      # find_best_target() — closest bottle
 │
 ├── threads/                      # Worker threads
 │   ├── ros_node.py              # ROS2 node + 20Hz control loop
@@ -1148,9 +1170,9 @@ bowling_target_nav/
 │   ├── display.py               # Wayland/X11 auto-detection
 │   ├── theme.py                 # Dark theme CSS
 │   ├── main_window.py           # Fullscreen window + controls
-│   ├── settings_window.py       # 5-tab parameter tuning
+│   ├── settings_window.py       # 8-tab settings (auto-save, motor calib)
 │   └── panels/
-│       ├── map_panel.py         # SLAM map rendering
+│       ├── map_panel.py         # SLAM map + scan-map consistency diagnostics
 │       └── camera_panel.py      # Camera + detection overlays
 │
 ├── detectors/                    # AI object detection
@@ -1219,7 +1241,7 @@ bowling_target_nav/
 | **ARRIVED is terminal** | `ros_node.py control_loop()` | Robot stops and stays stopped after arriving — user must press GO |
 | **Arrival confirmation** | `navigator._check_arrival()` | Requires 0.3s of sustained close readings — prevents single noisy frame from causing false arrival |
 | **Arrival hysteresis** | `navigator._check_arrival()` | Timer only resets when distance > 1.5× threshold — prevents oscillation near boundary |
-| **Bbox clipping detection** | `camera_worker.detect_objects()` | Flags when pin bbox hits frame edge — triggers early blind approach instead of using bad distance |
+| **Bbox clipping detection** | `camera_worker.detect_objects()` | Flags when bottle bbox hits frame edge — triggers early blind approach instead of using bad distance |
 | **Detection expiry** | `camera_worker.py` + `ros_node.py` | Stale detections (>1.5s old) are discarded, not acted on |
 | **Minimum speed enforcement** | `navigator.direct_navigate()` | Prevents commands below motor dead zone that cause buzzing |
 | **Obstacle emergency stop** | `navigator.direct_navigate()` | Zero velocity if obstacle < approach_distance with stuck timer for backup |

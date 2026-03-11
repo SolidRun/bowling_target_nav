@@ -25,7 +25,7 @@ from urllib.parse import urlparse, parse_qs
 LISTEN_PORT = 8080
 JPEG_QUALITY = 50
 SCALE = 1.0          # Stream at native resolution
-TARGET_FPS = 15
+TARGET_FPS = 30
 ROTATE_180 = True     # DSI-1 is mounted upside-down (weston transform=rotate-180)
 
 # ─── DRM constants ───
@@ -248,6 +248,20 @@ class UInputMouse:
         self._event(EV_KEY, BTN_TOUCH, 0)
         self._sync()
 
+    def press(self, x, y, button=BTN_LEFT):
+        """Press button down at (x, y) without releasing."""
+        self.move(x, y)
+        self._event(EV_KEY, button, 1)
+        self._event(EV_KEY, BTN_TOUCH, 1)
+        self._sync()
+
+    def release(self, x, y, button=BTN_LEFT):
+        """Release button at (x, y)."""
+        self.move(x, y)
+        self._event(EV_KEY, button, 0)
+        self._event(EV_KEY, BTN_TOUCH, 0)
+        self._sync()
+
     def close(self):
         if self.fd is not None:
             try:
@@ -310,9 +324,12 @@ body { background: #0a0a1a; display: flex; flex-direction: column;
           font-size: 13px; margin-left: auto; }
 .fs-btn:hover { background: #3a7a4a; }
 #screen-wrap { flex: 1; display: flex; align-items: center; justify-content: center;
-               width: 100%; overflow: hidden; }
-#screen { cursor: crosshair; max-width: 100%; max-height: 100%;
-          display: block; object-fit: contain; }
+               width: 100%; overflow: hidden; position: relative; }
+#screen { max-width: 100%; max-height: 100%;
+          display: block; object-fit: contain; user-select: none;
+          -webkit-user-drag: none; pointer-events: none; }
+#overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+           z-index: 5; cursor: crosshair; touch-action: none; }
 body.fullscreen .header { display: none; }
 body.fullscreen #screen-wrap { width: 100vw; height: 100vh; }
 body.fullscreen #status { display: none; }
@@ -330,10 +347,11 @@ body.fullscreen #status { display: none; }
   <div id="fps" style="color:#6b8"></div>
   <button class="fs-btn" id="fsBtn">Fullscreen</button>
 </div>
-<div id="screen-wrap"><img id="screen" /></div>
+<div id="screen-wrap"><img id="screen" draggable="false" /><div id="overlay"></div></div>
 <div id="status">Click to interact | Right-click supported | Press F11 or button for fullscreen</div>
 <script>
 const img = document.getElementById('screen');
+const overlay = document.getElementById('overlay');
 const status = document.getElementById('status');
 const fpsEl = document.getElementById('fps');
 const fsBtn = document.getElementById('fsBtn');
@@ -367,17 +385,33 @@ fsBtn.addEventListener('click', toggleFS);
 document.addEventListener('fullscreenchange', function() {
     if (!document.fullscreenElement) document.body.classList.remove('fullscreen');
 });
-// Double-click image to toggle fullscreen too
-img.addEventListener('dblclick', function(e) {
+overlay.addEventListener('dblclick', function(e) {
     e.preventDefault();
     toggleFS();
 });
 
+// Coordinate mapping: accounts for object-fit:contain letterboxing/pillarboxing
 function getCoords(e) {
     const r = img.getBoundingClientRect();
+    const imgAspect = W / H;
+    const elemAspect = r.width / r.height;
+    let renderW, renderH, offX, offY;
+    if (elemAspect > imgAspect) {
+        renderH = r.height;
+        renderW = r.height * imgAspect;
+        offX = (r.width - renderW) / 2;
+        offY = 0;
+    } else {
+        renderW = r.width;
+        renderH = r.width / imgAspect;
+        offX = 0;
+        offY = (r.height - renderH) / 2;
+    }
+    const cx = e.clientX !== undefined ? e.clientX : e.pageX;
+    const cy = e.clientY !== undefined ? e.clientY : e.pageY;
     return [
-        Math.round((e.clientX - r.left) / r.width * W),
-        Math.round((e.clientY - r.top) / r.height * H)
+        Math.round(Math.max(0, Math.min(W, (cx - r.left - offX) / renderW * W))),
+        Math.round(Math.max(0, Math.min(H, (cy - r.top - offY) / renderH * H)))
     ];
 }
 function send(path, x, y, extra) {
@@ -385,30 +419,71 @@ function send(path, x, y, extra) {
     if (extra) url += '&' + extra;
     fetch(url);
 }
-img.addEventListener('click', function(e) {
-    const [x, y] = getCoords(e);
-    send('/click', x, y, 'btn=left');
-    status.textContent = 'Left click: (' + x + ', ' + y + ')';
-});
-img.addEventListener('contextmenu', function(e) {
+let dragging = false;
+let dragBtn = 'left';
+let moveThrottle = null;
+
+// All mouse events on overlay (transparent div on top of img — no browser drag interference)
+overlay.addEventListener('mousedown', function(e) {
     e.preventDefault();
     const [x, y] = getCoords(e);
-    send('/click', x, y, 'btn=right');
-    status.textContent = 'Right click: (' + x + ', ' + y + ')';
+    dragBtn = e.button === 2 ? 'right' : 'left';
+    dragging = true;
+    send('/mousedown', x, y, 'btn=' + dragBtn);
+    status.textContent = 'Down: (' + x + ', ' + y + ')';
 });
-let moveThrottle = null;
-img.addEventListener('mousemove', function(e) {
+window.addEventListener('mouseup', function(e) {
+    if (!dragging) return;
+    const [x, y] = getCoords(e);
+    send('/mouseup', x, y, 'btn=' + dragBtn);
+    dragging = false;
+    status.textContent = 'Up: (' + x + ', ' + y + ')';
+});
+window.addEventListener('mousemove', function(e) {
     if (moveThrottle) return;
-    moveThrottle = setTimeout(function() { moveThrottle = null; }, 80);
+    const delay = dragging ? 16 : 80;
+    moveThrottle = setTimeout(function() { moveThrottle = null; }, delay);
     const [x, y] = getCoords(e);
     send('/move', x, y);
+    if (dragging) status.textContent = 'Drag: (' + x + ', ' + y + ')';
 });
-img.addEventListener('touchstart', function(e) {
+overlay.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
+// Touch support on overlay
+let touchId = null;
+overlay.addEventListener('touchstart', function(e) {
     e.preventDefault();
-    const t = e.touches[0];
+    const t = e.changedTouches[0];
+    touchId = t.identifier;
     const [x, y] = getCoords(t);
-    send('/click', x, y, 'btn=left');
-    status.textContent = 'Touch: (' + x + ', ' + y + ')';
+    dragging = true;
+    dragBtn = 'left';
+    send('/mousedown', x, y, 'btn=left');
+    status.textContent = 'Touch down: (' + x + ', ' + y + ')';
+});
+overlay.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+        if (t.identifier === touchId) {
+            if (moveThrottle) return;
+            moveThrottle = setTimeout(function() { moveThrottle = null; }, 16);
+            const [x, y] = getCoords(t);
+            send('/move', x, y);
+            status.textContent = 'Touch drag: (' + x + ', ' + y + ')';
+        }
+    }
+});
+overlay.addEventListener('touchend', function(e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+        if (t.identifier === touchId) {
+            const [x, y] = getCoords(t);
+            send('/mouseup', x, y, 'btn=left');
+            dragging = false;
+            touchId = null;
+            status.textContent = 'Touch up: (' + x + ', ' + y + ')';
+        }
+    }
 });
 </script>
 </body></html>"""
@@ -448,9 +523,10 @@ class Handler(BaseHTTPRequestHandler):
             interval = 1.0 / TARGET_FPS
             try:
                 while True:
+                    t0 = time.monotonic()
                     jpeg = self.grabber.get_frame()
                     if jpeg is None:
-                        time.sleep(0.1)
+                        time.sleep(0.02)
                         continue
                     self.wfile.write(MJPEG_BOUNDARY + b'\r\n')
                     self.wfile.write(b'Content-Type: image/jpeg\r\n')
@@ -459,7 +535,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(jpeg)
                     self.wfile.write(b'\r\n')
                     self.wfile.flush()
-                    time.sleep(interval)
+                    elapsed = time.monotonic() - t0
+                    sleep = interval - elapsed
+                    if sleep > 0:
+                        time.sleep(sleep)
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
 
@@ -497,6 +576,34 @@ class Handler(BaseHTTPRequestHandler):
             y = int(params.get('y', ['0'])[0])
             if self.mouse:
                 self.mouse.move(x, y)
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.send_header('Content-Length', '2')
+            self.end_headers()
+            self.wfile.write(b'ok')
+
+        elif parsed.path == '/mousedown':
+            params = parse_qs(parsed.query)
+            x = int(params.get('x', ['0'])[0])
+            y = int(params.get('y', ['0'])[0])
+            btn_name = params.get('btn', ['left'])[0]
+            btn = BTN_RIGHT if btn_name == 'right' else BTN_LEFT
+            if self.mouse:
+                self.mouse.press(x, y, btn)
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.send_header('Content-Length', '2')
+            self.end_headers()
+            self.wfile.write(b'ok')
+
+        elif parsed.path == '/mouseup':
+            params = parse_qs(parsed.query)
+            x = int(params.get('x', ['0'])[0])
+            y = int(params.get('y', ['0'])[0])
+            btn_name = params.get('btn', ['left'])[0]
+            btn = BTN_RIGHT if btn_name == 'right' else BTN_LEFT
+            if self.mouse:
+                self.mouse.release(x, y, btn)
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain')
             self.send_header('Content-Length', '2')

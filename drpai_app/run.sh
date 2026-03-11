@@ -83,7 +83,13 @@ echo ""
 echo -e "${CYAN}============================================${NC}"
 echo -e "${CYAN}  YOLO DRP-AI Detection${NC}"
 echo -e "${CYAN}============================================${NC}"
-echo -e "  Classes: 1 ("bowling-pins")"
+LABELS_FILE="$SCRIPT_DIR/labels.txt"
+if [ -f "$LABELS_FILE" ]; then
+    CLASSES=$(grep -v '^#' "$LABELS_FILE" | grep -v '^$' | tr '\n' ',' | sed 's/,$//')
+    echo -e "  Classes: $CLASSES (from labels.txt)"
+else
+    echo -e "  Classes: (see define.h defaults)"
+fi
 echo -e "  Input:   640x640"
 if [ "$MODE_FLAG" = "--console" ]; then
     echo -e "  Display: console (no GUI)"
