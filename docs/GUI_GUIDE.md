@@ -21,21 +21,21 @@
 
 ## 1. Overview
 
-The GUI is a fullscreen GTK3 application running on Wayland/Weston. It displays real-time SLAM mapping, camera feed with AI detection overlays, and navigation controls — all in a single window.
+The GUI is a fullscreen GTK3 application running on Wayland/Weston. It displays a real-time radar view (LiDAR + odometry), camera feed with AI detection overlays, and navigation controls — all in a single window.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  V2N Robot Control          SLAM + Camera + Navigation          │
+│  V2N Robot Control          Radar + Camera + Navigation          │
 │  ┌────────────────────────┐  ┌────────────────────────────────┐ │
 │  │                        │  │                    ┌──────────┐│ │
-│  │      SLAM Map          │  │     Camera Feed    │NAVIGATING││ │
+│  │      Radar View        │  │     Camera Feed    │NAVIGATING││ │
 │  │                        │  │                    └──────────┘│ │
 │  │   ● Robot (green)      │  │   ┌────┐                      │ │
 │  │   · Laser (red)        │  │   │ btl│ 0.45m  12°           │ │
 │  │   ◇ Target (magenta)   │  │   └────┘                      │ │
 │  │   ─ Nav path (magenta) │  │                                │ │
 │  │                        │  │              v=0.12 m/s  w=5°/s│ │
-│  │  Robot: (1.2, 0.5) 45° │  │  Detection: Bottles: 0.45m, 12° │ │
+│  │  Robot: (1.2, 0.5) 45° │  │  Detection: Target: 0.45m, 12° │ │
 │  └────────────────────────┘  └────────────────────────────────┘ │
 │                                                                  │
 │  [GO TO TARGET]  [STOP]  ● NAVIGATING 0.45m      [SETTINGS][QUIT]│
@@ -54,7 +54,7 @@ The window is divided into three vertical sections:
 
 ### Title Bar (Top 50px)
 - **"V2N Robot Control"** — Blue (#58a6ff), 26px font
-- **"SLAM + Camera + Navigation"** — Gray (#8b949e), 14px subtitle
+- **"Radar + Camera + Navigation"** — Gray (#8b949e), 14px subtitle
 
 ### Content Area (Middle, fills remaining space)
 - Split 50/50 into left (Map) and right (Camera) panels
@@ -67,47 +67,36 @@ The window is divided into three vertical sections:
 
 ---
 
-## 3. Map Panel (Left)
+## 3. Radar Panel (Left)
 
-**Header**: "SLAM Map" in blue (0.345, 0.651, 1.0), 15px font
+**Header**: "Radar View" in blue (0.345, 0.651, 1.0), 15px font
 
 ### What's Displayed
 
 | Element | Color | Description |
 |---------|-------|-------------|
-| Free space | Dark gray (50,50,50) | Navigable areas |
-| Occupied | Orange (0,200,255 BGR) | Walls and obstacles |
-| Unknown | Very dark (30,30,30) | Unexplored areas |
 | Robot | Green circle + white arrow | Current position and heading |
-| Laser (match) | Green dots | Laser hits occupied cell (SLAM correct) |
-| Laser (mismatch) | Red dots | Laser hits free cell (SLAM drift/stale map) |
-| Laser (unmapped) | Orange dots | Laser hits unknown area |
-| Nav target | Magenta diamond | Target position in map frame |
+| Laser dots | Red dots | Live LiDAR scan points |
+| Nav target | Magenta diamond | Target position in odom frame |
 | Nav path | Magenta line | Line from robot to target |
 | Grid | Gray lines | Drawn when zoom > 15px/meter |
 
-### How Map Rendering Works
+### How Radar Rendering Works
 
-1. The `/map` topic (OccupancyGrid) is received by the ROS thread
-2. Each cell value is mapped to a color: -1→unknown, 0→free, >0→occupied
-3. The image is flipped vertically (ROS origin is bottom-left, display is top-left)
-4. Scaled to fit the panel while preserving aspect ratio
-5. Robot position is obtained from TF (`map → base_link`)
-6. LiDAR points are transformed from robot frame to map frame and plotted
-7. Navigation target (if any) is drawn as a diamond with a line from robot
+1. Robot position is obtained from TF (`odom → base_link`)
+2. LiDAR points from `/scan` are transformed from robot frame to odom frame and plotted
+3. Navigation target (if any) is drawn as a diamond with a line from robot
 
-### Diagnostic Overlay (Bottom of Map Panel)
+### Diagnostic Overlay (Bottom of Radar Panel)
 
-Three lines of diagnostic information are displayed below the map:
+Diagnostic information is displayed below the radar:
 
-1. **Robot pose + map info**: `Robot: (1.23, 0.45) 67° | Map: 200x200 updates:42`
-2. **Topic rates + TF age**: `Scan: 5.5Hz (360pts) | Map: 3.3Hz | TF age: 0.1s` — Color-coded: green (<0.5s), yellow (<2s), red (>2s)
-3. **Scan-map consistency**: `Map match: 85% (120 ok / 15 miss / 10 unmapped of 145)` — Shows how well the laser scan matches the SLAM map
+1. **Robot pose**: `Robot: (1.23, 0.45) 67°`
+2. **Topic rates + TF age**: `Scan: 5.5Hz (360pts) | TF age: 0.1s` -- Color-coded: green (<0.5s), yellow (<2s), red (>2s)
 
-### Map Rotation
+### Radar Rotation
 
-The map can be rotated via the Map tab in Settings (-180° to +180°). Rotation is applied to:
-- The map image (via OpenCV affine transform)
+The radar view can be rotated via the Map tab in Settings (-180° to +180°). Rotation is applied to:
 - All overlay elements (robot marker, laser points, nav target)
 - Robot heading arrow (adjusted for rotation angle)
 
@@ -155,7 +144,7 @@ These are Cairo RGB values from `camera_panel.py`, rendered as semi-transparent 
 
 ### Info Label (Bottom)
 ```
-Detection: Bottles: 0.45m, 12.3°
+Detection: Target: 0.45m, 12.3°
 ```
 
 ---
@@ -164,7 +153,7 @@ Detection: Bottles: 0.45m, 12.3°
 
 | Button | Size | Style | Keyboard | Action |
 |--------|------|-------|----------|--------|
-| **GO TO TARGET** | 200x60px | Green (suggested-action) | `G` | Start navigating to closest bottle |
+| **GO TO TARGET** | 200x60px | Green (suggested-action) | `G` | Start navigating to closest target |
 | **STOP** | 200x60px | Red (destructive-action) | `Space` or `S` | Emergency stop |
 | **SETTINGS** | 120x60px | Blue (settings-btn) | — | Open settings window |
 | **QUIT** | 100x60px | Orange (quit-btn) | `Q` or `ESC` | Quit application |
@@ -223,7 +212,7 @@ All keyboard events are captured by the main window's `key-press-event` handler.
 
 ## 8. Settings Window
 
-A 620x740px dialog window with **8 tabs** for real-time parameter tuning. All changes take effect **immediately** and are **auto-saved** to disk after 2 seconds of inactivity (debounced). Settings persist across restarts via `~/.config/bowling_target_nav/calibration.json`.
+A 620x740px dialog window with **8 tabs** for real-time parameter tuning. All changes take effect **immediately** and are **auto-saved** to disk after 2 seconds of inactivity (debounced). Settings persist across restarts via `~/.config/target_nav/calibration.json`.
 
 ### Tab 1: Navigation
 
@@ -255,7 +244,7 @@ Controls the 360° search scan and spiral search behavior.
 
 ### Tab 3: Blind Approach
 
-Controls dead-reckoning behavior when camera loses sight of bottle.
+Controls dead-reckoning behavior when camera loses sight of target.
 
 | Parameter | Range | Default | Unit | Effect |
 |-----------|-------|---------|------|--------|
@@ -292,7 +281,7 @@ Controls LiDAR-based obstacle avoidance.
 
 ### Tab 6: Map
 
-Controls the SLAM map display panel appearance.
+Controls the radar view panel appearance.
 
 | Parameter | Range | Default | Unit | Effect |
 |-----------|-------|---------|------|--------|
@@ -312,7 +301,7 @@ Tools for calibrating distance estimation, testing motors, and configuring senso
 
 #### Distance Calibration
 
-1. Place a bottle at a **known distance** from the camera
+1. Place a target at a **known distance** from the camera
 2. Enter the distance in the spin button (0.3–3.0 m)
 3. Press **CALIBRATE**
 4. The system captures the current bbox height and stores it as reference
@@ -376,7 +365,7 @@ Resets **all** parameters to factory defaults:
 All parameter changes are automatically saved to disk:
 1. User adjusts a slider or toggle
 2. A 2-second debounce timer starts (resets on each new change)
-3. After 2 seconds of no changes, `save_calibration()` writes to `~/.config/bowling_target_nav/calibration.json`
+3. After 2 seconds of no changes, `save_calibration()` writes to `~/.config/target_nav/calibration.json`
 4. On next startup, all saved parameters are restored with type-safe coercion
 
 ---

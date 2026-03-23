@@ -16,13 +16,13 @@ TF tree produced:
 
 Usage:
     # Default (all drivers):
-    ros2 launch bowling_target_nav bringup.launch.py
+    ros2 launch target_nav bringup.launch.py
 
     # Custom serial ports:
-    ros2 launch bowling_target_nav bringup.launch.py arduino_port:=/dev/ttyACM1 lidar_port:=/dev/ttyUSB1
+    ros2 launch target_nav bringup.launch.py arduino_port:=/dev/ttyACM1 lidar_port:=/dev/ttyUSB1
 
     # Without Arduino (LiDAR + TF only):
-    ros2 launch bowling_target_nav bringup.launch.py enable_arduino:=false
+    ros2 launch target_nav bringup.launch.py enable_arduino:=false
 """
 
 import os
@@ -37,7 +37,7 @@ from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
     # Get package directory
-    pkg_dir = get_package_share_directory('bowling_target_nav')
+    pkg_dir = get_package_share_directory('target_nav')
     urdf_file = os.path.join(pkg_dir, 'urdf', 'v2n_robot.urdf')
 
     # Read URDF file
@@ -94,20 +94,19 @@ def generate_launch_description():
 
     # Arduino driver node (motor control + raw odometry)
     arduino_node = Node(
-        package='bowling_target_nav',
+        package='target_nav',
         executable='arduino_driver_node',
         name='arduino_driver_node',
         output='screen',
         parameters=[{
             'serial_port': LaunchConfiguration('arduino_port'),
-            'baudrate': 115200,
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }]
     )
 
     # Odometry node (converts raw Arduino odom to nav_msgs/Odometry + TF)
     odometry_node = Node(
-        package='bowling_target_nav',
+        package='target_nav',
         executable='odometry_node',
         name='odometry_node',
         output='screen',

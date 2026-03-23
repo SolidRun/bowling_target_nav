@@ -3,7 +3,7 @@
   V2N Mecanum Robot URDF Description
   ==================================
 
-  Simple URDF for Nav2 navigation. Defines robot footprint and sensor frames.
+  Simple URDF for RZ/V2N robot. Defines robot footprint and sensor frames.
 
   Frame hierarchy:
     base_footprint (on ground)
@@ -22,7 +22,11 @@
   <!-- Base footprint - on the ground plane -->
   <link name="base_footprint"/>
 
-  <!-- Base link - robot center -->
+  <!-- Base link - robot center
+       NOTE: Dimensions here are for RViz visualization only.
+       config.py is the SINGLE SOURCE OF TRUTH for all robot
+       geometry, sensor positions, and hardware constants.
+       Sensor positions/yaw are overridden at runtime by ros_node.py. -->
   <link name="base_link">
     <visual>
       <geometry>
@@ -81,11 +85,14 @@
     </inertial>
   </link>
 
-  <!-- Joint: base_link to laser -->
+  <!-- LiDAR mounting. VALUES HERE ARE INITIAL DEFAULTS FOR RVIZ ONLY.
+       At runtime, ros_node.py publishes a static TF from config
+       that overrides this joint. To change LiDAR mounting, update
+       config.py DEFAULT_LIDAR / DEFAULT_LIDAR_YAW or use the
+       Settings > Sensors GUI -- do NOT edit this URDF. -->
   <joint name="laser_joint" type="fixed">
     <parent link="base_link"/>
     <child link="laser"/>
-    <!-- LiDAR mounted on top, 15cm above base_link center -->
     <origin xyz="0 0 0.15" rpy="0 0 0"/>
   </joint>
 
@@ -102,11 +109,14 @@
     </visual>
   </link>
 
-  <!-- Joint: base_link to camera -->
+  <!-- Camera mounting. VALUES HERE ARE INITIAL DEFAULTS FOR RVIZ ONLY.
+       At runtime, ros_node.py publishes a static TF from config
+       that overrides this joint. To change camera mounting, update
+       config.py DEFAULT_CAMERA / DEFAULT_CAMERA_YAW or use the
+       Settings > Sensors GUI -- do NOT edit this URDF. -->
   <joint name="camera_joint" type="fixed">
     <parent link="base_link"/>
     <child link="camera_link"/>
-    <!-- Camera mounted on front, looking forward -->
     <origin xyz="0.12 0 0.10" rpy="0 0 0"/>
   </joint>
 

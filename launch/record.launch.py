@@ -6,13 +6,13 @@ Records key topics for offline analysis and replay.
 
 Usage:
     # Record all default topics
-    ros2 launch bowling_target_nav record.launch.py
+    ros2 launch target_nav record.launch.py
 
     # Custom output directory
-    ros2 launch bowling_target_nav record.launch.py bag_dir:=/path/to/bags
+    ros2 launch target_nav record.launch.py bag_dir:=/path/to/bags
 
     # Record with compression
-    ros2 launch bowling_target_nav record.launch.py compress:=true
+    ros2 launch target_nav record.launch.py compress:=true
 """
 
 import os
@@ -44,8 +44,9 @@ def generate_launch_description():
         '/scan',                  # LiDAR scans
         '/cmd_vel',               # Velocity commands
         '/odom',                  # Odometry
-        '/target_pose',           # Vision target pose
-        '/target_detection',      # Vision detection details
+        '/detections',            # Vision detections
+        '/nav_state',             # Navigation state
+        '/nav_command',           # Navigation commands
         '/arduino/odom_raw',      # Raw Arduino odometry
         '/arduino/status',        # Arduino connection status
         '/diagnostics',           # System diagnostics

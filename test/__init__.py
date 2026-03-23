@@ -1,6 +1,6 @@
 """
-Bottle Target Navigation - Test Suite
-=======================================
+Target Nav - Test Suite
+=======================
 
 Comprehensive tests for RZ/V2N robot hardware and software components.
 

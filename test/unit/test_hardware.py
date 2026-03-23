@@ -12,9 +12,9 @@ import numpy as np
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from bowling_target_nav.hardware.arduino import MockArduino, EncoderData, create_arduino
-from bowling_target_nav.hardware.camera import MockCamera, FrameData, create_camera
-from bowling_target_nav.hardware.lidar import MockLidar, LidarScan, LidarPoint, create_lidar
+from target_nav.hardware.arduino import MockArduino, EncoderData, create_arduino
+from target_nav.hardware.camera import MockCamera, FrameData, create_camera
+from target_nav.hardware.lidar import MockLidar, LidarScan, LidarPoint, create_lidar
 
 
 class TestMockArduino:

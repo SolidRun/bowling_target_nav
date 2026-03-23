@@ -1,17 +1,17 @@
 [Unit]
-Description=V2N Robot Auto-Start (ROS2 Bottle Target Nav)
-After=network.target multi-user.target
+Description=Target Nav Robot Drivers (LiDAR, Arduino, Odometry)
+After=network.target seatd.service
 Wants=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/ros2_ws/src/bowling_target_nav/scripts
-ExecStartPre=/bin/sleep 5
-ExecStart=/root/ros2_ws/src/bowling_target_nav/scripts/robot_autostart.sh
-ExecStop=/bin/bash -c 'pkill -f "ros2 launch bowling" || true; pkill -f arduino_driver || true; pkill -f rplidar || true'
+WorkingDirectory=/root
+ExecStartPre=/bin/sleep 3
+ExecStart=/root/ros2_ws/src/target_nav/scripts/autostart.sh
+ExecStop=/bin/bash -c 'pkill -f "ros2 launch target_nav" || true; sleep 1; pkill -9 -f "rplidar_node|arduino_driver|odometry_node|robot_state_publisher" || true; fuser -k /dev/ttyACM0 /dev/ttyUSB0 2>/dev/null || true'
 Restart=on-failure
-RestartSec=10
+RestartSec=5
 StandardOutput=journal
 StandardError=journal
 

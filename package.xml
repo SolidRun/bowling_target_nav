@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>bowling_target_nav</name>
+  <name>target_nav</name>
   <version>1.0.0</version>
   <description>
     Vision-based target detection and autonomous navigation for bottle target approach.
@@ -24,10 +24,6 @@
 
   <!-- Navigation -->
   <exec_depend>nav2_msgs</exec_depend>
-
-  <!-- Mapping (Cartographer) -->
-  <exec_depend>cartographer_ros</exec_depend>
-  <exec_depend>rviz2</exec_depend>
 
   <!-- LiDAR Driver -->
   <exec_depend>rplidar_ros</exec_depend>

@@ -14,8 +14,7 @@
 6. [Camera Configuration](#6-camera-configuration)
 7. [URDF Frame Definitions](#7-urdf-frame-definitions)
 8. [Mecanum Wheel Kinematics](#8-mecanum-wheel-kinematics)
-9. [Cartographer SLAM Tuning](#9-cartographer-slam-tuning)
-10. [Troubleshooting Hardware](#10-troubleshooting-hardware)
+9. [Troubleshooting Hardware](#9-troubleshooting-hardware)
 
 ---
 
@@ -272,14 +271,6 @@ wz_pwm = int(angular_z / max_angular * 255)
 
 The `rplidar_ros` package publishes `/scan` (sensor_msgs/LaserScan).
 
-### Cartographer Filter Settings
-
-```lua
--- In config/cartographer.lua:
-TRAJECTORY_BUILDER_2D.min_range = 0.1   -- Ignore < 10cm
-TRAJECTORY_BUILDER_2D.max_range = 8.0   -- Ignore > 8m
-```
-
 ### Software Filter (in Navigator)
 
 ```python
@@ -370,7 +361,7 @@ base_footprint (ground plane)
 ### Important Notes
 
 - Wheel frames are **visual only** — no joints for simulation
-- The `base_link → laser` transform tells Cartographer where the LiDAR is
+- The `base_link → laser` transform tells the navigation system where the LiDAR is
 - The `base_link → camera_link` transform is used for vision → base_link coordinate conversion
 - `robot_state_publisher` broadcasts these as static TF transforms
 
@@ -436,64 +427,7 @@ wz = (-FL + FR - RL + RR) / (4 * L) * wheel_radius
 
 ---
 
-## 9. Cartographer SLAM Tuning
-
-### Key Parameters (`config/cartographer.lua`)
-
-```lua
--- Frames
-map_frame = "map"
-tracking_frame = "base_link"
-odom_frame = "odom"
-provide_odom_frame = true        -- Cartographer publishes map→odom
-
--- Sensor inputs
-use_odometry = true              -- Wheel encoder integration
-use_imu_data = false             -- No IMU on this robot
-num_laser_scans = 1              -- Single 2D LiDAR
-
--- LiDAR range
-min_range = 0.1                  -- Ignore below 10cm
-max_range = 8.0                  -- Ignore beyond 8m
-
--- Map resolution
-resolution = 0.05                -- 5cm per grid cell
-
--- Scan matching
-use_online_correlative_scan_matching = true  -- Brute-force alignment
-
--- Motion filtering
-max_distance_meters = 0.1        -- Minimum movement to add scan
-max_angle_radians = 0.00873      -- ~0.5° minimum rotation
-
--- Submap size
-num_range_data = 90              -- Scans per submap
-
--- Global SLAM (DISABLED for CPU efficiency)
-optimize_every_n_nodes = 0       -- No loop closure
-
--- Publish rate
-pose_publish_period_sec = 0.005  -- 200Hz pose updates
-submap_publish_period_sec = 0.3  -- 3Hz map updates
-```
-
-### Why No Loop Closure?
-
-Loop closure (`optimize_every_n_nodes > 0`) runs a global optimizer that matches current scans against all previous submaps. On the V2N's ARM processor, this causes CPU spikes and latency. Since the bottle environment is typically small and the robot returns to start, drift is manageable without it.
-
-### Tuning Tips
-
-| Symptom | Adjustment |
-|---------|-----------|
-| Map jittery | Increase `num_range_data` (larger submaps, more stable) |
-| Map drifts | Enable loop closure: `optimize_every_n_nodes = 35` |
-| Robot pose jumps | Increase `lookup_transform_timeout_sec` |
-| High CPU | Reduce `max_range`, increase `num_range_data` |
-| Map not building | Check `/scan` topic: `ros2 topic echo /scan --once` |
-
----
-
-## 10. Troubleshooting Hardware
+## 9. Troubleshooting Hardware
 
 ### Verify All Devices
 

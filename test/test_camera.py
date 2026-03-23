@@ -184,53 +184,9 @@ class CameraTestBridge:
         )
 
     def load_yolo(self, model_path: Optional[str] = None) -> Tuple[bool, str]:
-        """Load YOLO model for detection."""
-        self.logger.info("Loading YOLO model...")
-
-        # Find model path
-        if model_path is None:
-            paths = [
-                os.path.expanduser('~/ros2_ws/src/bowling_target_nav/models/bowling_yolov5.onnx'),
-                os.path.expanduser('~/ros2_ws/install/bowling_target_nav/share/bowling_target_nav/models/bowling_yolov5.onnx'),
-            ]
-            for p in paths:
-                if os.path.exists(p):
-                    model_path = p
-                    break
-
-        if model_path is None or not os.path.exists(model_path):
-            return False, "Model file not found"
-
-        self.logger.data("Model path", model_path)
-
-        try:
-            # Try to import from package
-            from bowling_target_nav.detectors import YoloDetector
-            from bowling_target_nav.utils import DistanceEstimator
-
-            self.detector = YoloDetector(
-                model_path=model_path,
-                conf_threshold=0.5
-            )
-
-            self.estimator = DistanceEstimator(
-                reference_box_height=100.0,
-                reference_distance=1.0,
-                frame_width=640,
-                frame_height=480,
-                horizontal_fov=60.0
-            )
-
-            self.logger.success("YOLO model loaded")
-            self.logger.data("Classes", self.detector.get_class_names())
-            return True, "Model loaded"
-
-        except ImportError as e:
-            self.logger.error(f"Import error: {e}")
-            return False, f"Import error: {e}"
-        except Exception as e:
-            self.logger.error(f"Load failed: {e}")
-            return False, str(e)
+        """Load YOLO model for detection (requires DRP-AI hardware)."""
+        self.logger.info("YOLO detection uses DRP-AI hardware — not available in test mode")
+        return False, "DRP-AI detection not available in test mode"
 
     def detect(self, frame) -> List[DetectionResult]:
         """Run YOLO detection on frame."""
