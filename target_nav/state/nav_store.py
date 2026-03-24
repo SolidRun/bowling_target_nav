@@ -3,13 +3,15 @@
 NavStore holds the navigation state machine value, the current target
 position (robot and odom frame), GO/STOP command flags, obstacle status,
 velocity commands, and timing data for target-lost and search phases.
-The Navigator (ROS thread) writes state and telemetry; the GUI reads
-all data via ``get_gui_snapshot()`` (single lock acquisition per frame).
+The Nav process (Core 1) writes state via NavShmWriter; the GUI SHM
+poll thread reads NavShmReader and populates this store; the GTK main
+loop reads all data via ``get_gui_snapshot()`` (single lock acquisition
+per frame).
 
 Architecture:
-    SharedState owns one NavStore instance. The GUI bridge node subscribes
-    to the /nav_state ROS2 topic and writes snapshots into this store;
-    the GTK main loop reads it for status display and overlays.
+    SharedState owns one NavStore instance. The SHM poll thread reads
+    nav state from struct SHM (NavShmReader) and writes snapshots into
+    this store; the GTK main loop reads it for status display and overlays.
 
 Key class:
     NavStore -- RLock-protected container with 0.1 s timeout.
@@ -33,8 +35,8 @@ class NavStore:
     Owns the nav state enum, current target position in robot and map
     frames, GO/STOP boolean flags, obstacle ahead flag and distance,
     last-seen and search-start timestamps, current cmd_vel, and the
-    LiDAR distance at the target angle.  Written by Navigator (ROS
-    thread); read by GUI panels via ``get_gui_snapshot()``.
+    LiDAR distance at the target angle.  Written by the SHM poll thread
+    (from NavShmReader); read by GUI panels via ``get_gui_snapshot()``.
     """
 
     LOCK_TIMEOUT = STORE_LOCK_TIMEOUT
@@ -167,14 +169,14 @@ class NavStore:
         finally:
             self._release()
 
-    # -- Cross-process timestamp setters (used by GUI bridge) --
+    # -- Cross-process timestamp setters (used by SHM poll thread) --
 
     def set_last_target_time(self, t: float) -> None:
         """Set the last-target-seen timestamp directly.
 
-        Used by the GUI bridge to reconstruct absolute timestamps from
-        relative deltas received over the /nav_state ROS2 topic.  This
-        is the thread-safe alternative to direct field assignment.
+        Used by the SHM poll thread to reconstruct absolute timestamps
+        from relative deltas received via NavShmReader.  This is the
+        thread-safe alternative to direct field assignment.
 
         Args:
             t: Absolute timestamp (seconds since epoch).
@@ -188,8 +190,8 @@ class NavStore:
     def set_search_start_time(self, t: float) -> None:
         """Set the search start timestamp directly.
 
-        Used by the GUI bridge to reconstruct absolute timestamps from
-        relative deltas received over the /nav_state ROS2 topic.
+        Used by the SHM poll thread to reconstruct absolute timestamps
+        from relative deltas received via NavShmReader.
 
         Args:
             t: Absolute timestamp (seconds since epoch).

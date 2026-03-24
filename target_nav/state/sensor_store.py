@@ -2,13 +2,15 @@
 
 SensorStore holds the robot pose (x, y, theta) from TF, laser scan
 points in Cartesian form, raw LaserScan messages for angle-based
-distance lookup, and smoothed rate/age diagnostics.  The ROS thread
-writes all data; the GTK main loop reads it for laser rendering.
+distance lookup, and smoothed rate/age diagnostics.  The Nav process
+(Core 1) writes LiDAR data via LaserShmWriter; the GUI SHM poll
+thread reads LaserShmReader and populates this store; the GTK main
+loop reads it for laser rendering.
 
 Architecture:
-    SharedState owns one SensorStore instance. The GUI bridge node
-    subscribes to ROS2 topics and writes data into this store; the GTK
-    main loop reads it for laser rendering.
+    SharedState owns one SensorStore instance. The SHM poll thread reads
+    laser data from struct SHM (LaserShmReader) and writes into this
+    store; the GTK main loop reads it for map_panel rendering.
 
 Key class:
     SensorStore -- RLock-protected container with 0.1 s timeout.
@@ -30,9 +32,9 @@ class SensorStore:
     """Thread-safe container for robot pose and LiDAR scan data.
 
     Owns the robot pose from TF, Cartesian laser points, raw LaserScan
-    message, and smoothed rate / count diagnostics.  Written by the ROS
-    thread; read by the GTK main loop for map_panel and status bar
-    rendering.
+    message, and smoothed rate / count diagnostics.  Written by the SHM
+    poll thread (from LaserShmReader); read by the GTK main loop for
+    map_panel and status bar rendering.
 
     Thread safety:
         All access is protected by an RLock with STORE_LOCK_TIMEOUT.

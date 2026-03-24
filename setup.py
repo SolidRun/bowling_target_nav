@@ -39,7 +39,7 @@ setup(
     maintainer='Your Name',
     maintainer_email='your.email@example.com',
     description='Vision-guided target navigation for RZ/V2N mecanum robot',
-    license='Apache-2.0',
+    license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [

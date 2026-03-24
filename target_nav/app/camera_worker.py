@@ -1,7 +1,9 @@
 """Camera capture and detection thread -- DRP-AI hardware accelerated only.
 
-This module runs as a dedicated thread (or process on Core 2) and implements
-the full detection pipeline:
+Runs in: Camera process (Process 2, Core 2) as a dedicated detection thread.
+The C++ DRP-AI binary runs on Core 3 to isolate heavy CPU from navigation.
+
+This module implements the full detection pipeline:
 
   1. **Capture**: Acquire BGR frames from the camera. In stream mode, the C++
      binary owns the camera and writes frames to /dev/shm/v2n_camera. In pipe

@@ -1,20 +1,25 @@
-"""Camera detection ROS2 node.
+"""Camera detection process (Core 2).
 
-Manages the DRP-AI detection pipeline and publishes results as ROS2 topics.
-Communicates with the C++ DRP-AI binary via /dev/shm (not ROS2) because
-the binary is a standalone process, not a ROS2 node.
+Manages the DRP-AI detection pipeline and writes results to struct SHM
+via DetShmWriter for both the Nav process and GUI to read directly.
+Also publishes to ROS2 topics as a backup path.
 
-Published topics:
+Runs in: Camera process (Process 2, Core 2).
+
+Struct SHM (primary data path, lock-free SPSC):
+    DetShmWriter: writes detection structs to /dev/shm/v2n_det.
+        -> Nav process reads via DetShmReader (20 Hz poll).
+        -> GUI reads via DetShmReader (20 Hz poll).
+
+C++ DRP-AI shared memory (Core 3):
+    /dev/shm/v2n_camera:       C++ writes raw BGR frames (GUI reads directly).
+    /dev/shm/v2n_detections:   C++ writes detection structs (camera_worker reads).
+    /dev/shm/v2n_calibration:  Python writes calibration for C++ to pick up.
+
+ROS2 topics (backup path):
     /detections (std_msgs/String): JSON-encoded detection list per frame.
     /detector_mode (std_msgs/String): Current detector mode ("Stream"/"Pipe").
-
-Subscribed topics:
     /settings_changed (std_msgs/String): Reload calibration from disk.
-
-Shared memory (C++ binary, NOT ROS2):
-    /dev/shm/v2n_camera:       C++ writes annotated BGR frames (GUI reads directly).
-    /dev/shm/v2n_detections:   C++ writes detection structs.
-    /dev/shm/v2n_calibration:  Python writes calibration for C++ to pick up.
 """
 
 import json
@@ -115,7 +120,7 @@ class _CameraStateAdapter:
                 "bbox_clipped": bool(d.bbox_clipped),
             })
 
-        # Write to struct SHM (GUI reads directly, no Bridge needed)
+        # Write to struct SHM (nav + GUI read directly, lock-free SPSC)
         try:
             self._node._det_shm.write(
                 timestamp=time.time(),
@@ -279,7 +284,7 @@ class CameraNode(Node):
         # State adapter for camera_worker
         self._adapter = _CameraStateAdapter(self)
 
-        # Struct SHM writer for detections (camera -> GUI, bypasses Bridge)
+        # Struct SHM writer for detections (camera -> nav + GUI, lock-free SPSC)
         self._det_shm = DetShmWriter()
 
         # Detection thread (started in start())

@@ -6,7 +6,7 @@
 # Sets up EVERYTHING on a fresh RZ/V2N device:
 #   1. Verifies ROS2 environment
 #   2. Builds the ROS2 package
-#   3. Installs helper scripts (bottle_launcher, bottle_gui, remote_desktop)
+#   3. Installs helper scripts (launcher, gui, remote_desktop)
 #   4. Sets up WiFi Access Point (hostapd + udhcpd)
 #   5. Creates udev rules (touchscreen, rfkill)
 #   6. Creates all systemd services (robot, target-nav-launcher, remote-desktop, wifi-ap)
@@ -29,6 +29,7 @@
 #   ./v2n_setup.sh --no-build   # Skip colcon build (if already built)
 #   ./v2n_setup.sh --wifi-only  # Only set up WiFi AP
 #   ./v2n_setup.sh --status     # Show status of all services
+#   ./v2n_setup.sh --rotate     # Toggle screen rotation (0 <-> 180 deg)
 #
 # ============================================================================
 
@@ -81,6 +82,88 @@ for arg in "$@"; do
         --no-build)   SKIP_BUILD=true ;;
         --wifi-only)  WIFI_ONLY=true ;;
         --status)     SHOW_STATUS=true ;;
+        --rotate)
+            # Toggle screen rotation and restart all display services
+            WESTON_INI="/etc/xdg/weston/weston.ini"
+            [ ! -f "$WESTON_INI" ] && WESTON_INI="/etc/weston.ini"
+
+            REMOTE_PY="/root/remote_desktop.py"
+
+            # Toggle Weston display rotation
+            if grep -q "transform=rotate-180" "$WESTON_INI" 2>/dev/null; then
+                sed -i 's/transform=rotate-180/transform=normal/' "$WESTON_INI"
+                echo -e "${GREEN}Screen: NORMAL (0 degrees)${NC}"
+            elif grep -q "transform=normal" "$WESTON_INI" 2>/dev/null; then
+                sed -i 's/transform=normal/transform=rotate-180/' "$WESTON_INI"
+                echo -e "${GREEN}Screen: ROTATED (180 degrees)${NC}"
+            else
+                if grep -q "\[output\]" "$WESTON_INI" 2>/dev/null; then
+                    sed -i '/\[output\]/a transform=rotate-180' "$WESTON_INI"
+                else
+                    printf "\n[output]\nname=DSI-1\ntransform=rotate-180\n" >> "$WESTON_INI"
+                fi
+                echo -e "${GREEN}Screen: ROTATED (180 degrees)${NC}"
+            fi
+
+            # Remote desktop should NEVER rotate independently.
+            # Weston's transform already affects the DRM framebuffer that
+            # remote_desktop.py reads. If ROTATE_180=True in remote_desktop.py
+            # AND Weston does rotate-180, the image gets double-rotated.
+            # Force ROTATE_180=False so remote desktop always mirrors the
+            # physical screen exactly.
+            if [ -f "$REMOTE_PY" ]; then
+                sed -i 's/^ROTATE_180 = True/ROTATE_180 = False/' "$REMOTE_PY"
+                echo -e "  Remote desktop: mirrors physical screen (no extra rotation)"
+            fi
+
+            echo "Stopping all GUI processes..."
+            pkill -9 -f main_gui 2>/dev/null || true
+            pkill -9 -f app_yolo_cam 2>/dev/null || true
+            pkill -9 -f nav_node 2>/dev/null || true
+            pkill -9 -f camera_node 2>/dev/null || true
+            pkill -9 -f remote_desktop.py 2>/dev/null || true
+            pkill -9 -f launcher.py 2>/dev/null || true
+            rm -f /dev/shm/v2n_*
+            sleep 1
+
+            echo "Restarting Weston..."
+            systemctl restart weston 2>/dev/null || true
+            sleep 3
+
+            echo "Restarting remote-desktop..."
+            systemctl restart remote-desktop 2>/dev/null || {
+                if [ -f /root/remote_desktop.py ]; then
+                    nohup python3 -u /root/remote_desktop.py > /tmp/remote_desktop.log 2>&1 &
+                    echo -e "  ${GREEN}remote_desktop.py started${NC}"
+                fi
+            }
+            sleep 1
+
+            echo "Restarting robot.service..."
+            if systemctl is-active --quiet robot.service 2>/dev/null; then
+                systemctl restart robot.service || true
+                echo -e "  ${GREEN}robot.service restarted${NC}"
+            else
+                systemctl start robot.service 2>/dev/null || true
+                echo -e "  ${YELLOW}robot.service started${NC}"
+            fi
+            sleep 2
+
+            echo "Restarting launcher..."
+            systemctl restart target-nav-launcher 2>/dev/null || {
+                if [ -f /root/launcher.py ]; then
+                    export XDG_RUNTIME_DIR=/run/user/996
+                    export WAYLAND_DISPLAY=wayland-1
+                    nohup python3 /root/launcher.py > /tmp/launcher.log 2>&1 &
+                    echo -e "  ${GREEN}launcher.py started${NC}"
+                fi
+            }
+            sleep 1
+
+            echo ""
+            echo -e "${GREEN}Done. Screen + remote desktop + all services restarted.${NC}"
+            exit 0
+            ;;
         --help|-h)
             echo "V2N Robot Provisioning Script"
             echo ""
@@ -91,6 +174,7 @@ for arg in "$@"; do
             echo "  --no-build   Skip colcon build"
             echo "  --wifi-only  Only set up WiFi AP"
             echo "  --status     Show service status"
+            echo "  --rotate     Toggle screen rotation 180 degrees"
             echo "  --help       Show this help"
             exit 0
             ;;
@@ -266,12 +350,12 @@ fi
 # ═══════════════════════════════════════════════════════════════════════
 step "Installing helper scripts"
 
-# bottle_launcher.py - GTK desktop launcher with Start/Stop GUI button
+# launcher.py - GTK desktop launcher with Start/Stop GUI button
 cp "$SCRIPT_DIR/launcher.py" /root/launcher.py
 chmod +x /root/launcher.py
 ok "launcher.py -> /root/"
 
-# bottle_gui.sh - shell script that kills old processes and starts main_gui
+# gui.sh - shell script that kills old processes and starts main_gui
 cp "$SCRIPT_DIR/gui.sh" /root/gui.sh
 chmod +x /root/gui.sh
 ok "gui.sh -> /root/"

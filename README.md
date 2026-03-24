@@ -1,42 +1,56 @@
 # Target Navigation — RZ/V2N Robot
 
-Autonomous target detection and navigation for the Renesas RZ/V2N mecanum robot. DRP-AI hardware-accelerated YOLO detection, holonomic VFH navigation with odometry-only localization, all in a fullscreen GTK3 GUI.
+Autonomous bowling-pin detection and navigation for the Renesas RZ/V2N mecanum robot. DRP-AI hardware-accelerated YOLO detection, holonomic VFH navigation with odometry-only localization, all in a fullscreen GTK3 GUI.
 
-## Architecture
+## Architecture (3-process, lock-free struct SHM)
 
-3 processes on 3 CPU cores:
+3 Python processes on 4 CPU cores with lock-free SPSC struct SHM IPC:
 
-| Core | Process | Modules | Rate |
-|------|---------|---------|------|
-| 0 | GUI (main) | GTK3 rendering, settings, user input | 10fps |
-| 1 | ROS2 + Navigation | /scan, TF2, control loop, Navigator | 20Hz |
-| 2 | Camera + DRP-AI | C++ stream inference, distance estimation | ~15fps |
+| Core | Process | Role | Rate |
+|------|---------|------|------|
+| 0 | GUI (main) | Pure GTK -- reads struct SHM directly, no ROS2 | 10 FPS |
+| 1 | Nav (nice -5) | ROS2 navigation, Kalman tracker, motor commands | 20 Hz |
+| 2 | Camera | DRP-AI subprocess management, detection tracking | ~10 FPS |
+| 3 | DRP-AI C++ binary | YOLO inference (pinned to isolate from nav) | ~10 FPS |
 
-IPC via SharedMemory (frames/map/laser), mp.Array (pose/nav state), mp.Queue (commands).
+### Data flow (all struct SHM, no JSON for real-time data)
 
-Set `TARGET_NAV_MULTIPROCESS=0` for single-process threading mode.
+```
+Camera (Core 2) --DetShmWriter--> Nav (Core 1) via DetShmReader [20Hz poll]
+Camera (Core 2) --DetShmWriter--> GUI (Core 0) via DetShmReader [20Hz poll]
+Camera (Core 2) --/dev/shm/v2n_camera--> GUI (Core 0) [raw BGR frames from C++]
+Nav (Core 1) --NavShmWriter--> GUI (Core 0) via NavShmReader [20Hz poll]
+Nav (Core 1) --LaserShmWriter--> GUI (Core 0) via LaserShmReader [20Hz poll]
+GUI (Core 0) --CmdRingBuffer.push()--> Nav (Core 1) via CmdRingBuffer.pop() [20Hz poll]
+```
+
+### Lock-free protocol
+
+- SPSC (Single Producer, Single Consumer) per channel
+- Torn-read protection via sequence number sandwich (seq_start == seq_end)
+- No locks, no JSON serialization, no Bridge process
+- struct.pack_into / struct.unpack_from for zero-copy binary I/O
 
 ## Detection Pipeline
 
+Target: bowling-pin (0.28m height x 0.08m width).
+
 ```
-DRP-AI C++ Binary (stream mode)
+DRP-AI C++ Binary (Core 3, stream mode)
     │
-    ├── Camera frames → /dev/shm/v2n_camera (zero-copy)
-    └── JSON detections → stdout
+    ├── Camera frames → /dev/shm/v2n_camera (zero-copy, GUI reads directly)
+    └── Detections → /dev/shm/v2n_detections (binary struct)
             │
             ▼
-    camera_worker.py filters:
-    1. Confidence threshold (default 0.30)
-    2. Min box size (10x15px — reject noise)
-    3. Max box size (80% frame — reject false positives)
-    4. Aspect ratio (target taller than wide)
-    5. Bbox size tracker (rolling median, reject outliers)
+    camera_worker.py (Core 2) filters:
+    1. C++ applies: confidence threshold, NMS, size/aspect filters
+    2. Python applies: temporal tracking (DetectionTracker)
+    3. Shape validation (width/height ratio vs bowling-pin dimensions)
+    4. Python pinhole model distance estimation (not C++)
             │
             ▼
-    Distance estimator (bbox height → meters)
-            │
-            ▼
-    IPC → ROS process → Navigator
+    DetShmWriter → Nav (Core 1) via DetShmReader [20Hz poll]
+    DetShmWriter → GUI (Core 0) via DetShmReader [20Hz poll]
 ```
 
 ## Navigation Engine
@@ -45,15 +59,15 @@ DRP-AI C++ Binary (stream mode)
 navigate_to_target(target)
     │
     ├── Distance fusion: camera (primary) + LiDAR (fallback when bbox clipped)
-    ├── Sensor offset compensation (camera 14cm, LiDAR 5cm from center)
+    ├── Sensor offset compensation (camera 15cm, LiDAR 12cm from center)
     │
-    ├── Far (>0.40m): Full VFH navigation with obstacle avoidance
+    ├── Far (>0.45m): Full VFH navigation with obstacle avoidance
     │   └── Speed scales with distance, mecanum strafing through gaps
     │
-    ├── Close (<0.40m): Direct approach at min_speed (0.07 m/s)
+    ├── Close (<0.45m): Direct approach at min_speed (0.10 m/s)
     │   └── Bypasses VFH — target IS the obstacle
     │
-    ├── Arrival (≤0.10m): Multi-signal check (vision + LiDAR + bbox_clipped)
+    ├── Arrival (≤0.22m): Multi-signal check (vision + LiDAR + bbox_clipped)
     │   └── 0.3s temporal confirmation
     │
     └── Target lost:
@@ -64,29 +78,35 @@ navigate_to_target(target)
 
 ## Settings (GUI)
 
-Only 2 detection sliders (everything else has safe hardcoded defaults):
+5 main tabs with sub-tabs, covering all tunable parameters:
 
-| Setting | Range | Default | Description |
-|---------|-------|---------|-------------|
-| Confidence | 0.05–0.95 | 0.30 | Lower = more detections, more false positives |
-| Detection Memory | 0.3–5.0s | 1.0s | How long to keep a lost detection |
+| Tab | Sub-tabs | Key Parameters |
+|-----|----------|----------------|
+| Navigate | Speed, Target, Approach | Linear/angular speed, approach distance, lost timeout |
+| Search | Scan, Spiral | 360° scan speed, spiral radius/growth/timeout |
+| Sensors | Detection, Calibration, Mounting, DRP-AI | Confidence (0.05–0.95, default 0.30), detection memory (0.3–5.0s, default 4.0s), DRP-AI frequencies |
+| Radar | (flat) | Radar range, point size, grid toggle, nav target overlay |
+| Tools | Drive, Motors, System | Hold-to-move motor test, Arduino calibration, reset defaults |
 
-Navigation params tunable in Nav/Search/Blind/Obstacle tabs. Sensor mounting in Setup tab. All auto-saved to `~/.config/target_nav/calibration.json`.
+All auto-saved to `~/.config/target_nav/calibration.json` with 2s debounce.
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `app/main.py` | Entry point — spawns processes/threads |
-| `app/nav_node.py` | ROS2 node + 20Hz control loop |
-| `app/camera_worker.py` | DRP-AI detection + filtering |
+| `app/main.py` | Entry point — spawns 3 processes, SHM poll thread |
+| `app/nav_node.py` | ROS2 node + 20Hz control loop (Core 1) |
+| `app/camera_node.py` | Camera ROS2 node — manages DRP-AI subprocess (Core 2) |
+| `app/camera_worker.py` | DRP-AI detection + filtering pipeline |
+| `app/nav_controller.py` | Navigation state machine (IDLE → NAVIGATING → ...) |
+| `app/target_tracker.py` | Kalman-filtered target tracker with LiDAR fusion |
+| `ipc/shm_struct.py` | Lock-free SPSC struct SHM readers/writers |
 | `nav/navigator.py` | Holonomic nav, VFH, blind approach, spiral search |
-| `nav/target_selector.py` | Pick closest valid detection |
-| `config.py` | All tunable params (defaults) |
+| `config.py` | All tunable params (defaults + validation ranges) |
 | `state/settings_store.py` | Runtime settings + calibration persistence |
-| `gui/settings_window.py` | 8-tab settings UI |
+| `gui/settings_window.py` | 5-tab settings UI (with sub-tabs) |
 | `gui/panels/map_panel.py` | Radar view + diagnostics rendering |
-| `gui/panels/camera_panel.py` | Camera feed + detection overlay |
+| `gui/panels/camera_panel.py` | Camera feed + nav-state badge + info bar |
 | `detectors/drp_binary_detector.py` | DRP-AI stream + pipe backends |
 
 ## Deploy to V2N
@@ -118,13 +138,19 @@ Localization is odometry-only (no SLAM). The `odom` frame is the fixed reference
 
 ## ROS2 Topics
 
-| Topic | Type | Direction | Purpose |
-|-------|------|-----------|---------|
-| `/cmd_vel` | Twist | Publish | Motor velocity |
-| `/scan` | LaserScan | Subscribe | LiDAR points |
-| `/odom` | Odometry | Subscribe (via TF) | Robot pose |
-| `/gui/command` | String | Subscribe | Remote GO/STOP |
-| `/arduino/cmd` | String | Publish | Motor calibration |
+| Topic | Type | Node | Direction | Purpose |
+|-------|------|------|-----------|---------|
+| `/cmd_vel` | Twist | nav_node | Publish | Motor velocity |
+| `/scan` | LaserScan | nav_node | Subscribe | LiDAR points |
+| `/arduino/cmd` | String | nav_node | Publish | Raw Arduino commands |
+| `/reset_odom` | Empty | nav_node | Publish | Odometry reset trigger |
+| `/nav_state` | String | nav_node | Publish | Nav state snapshot (backup, JSON) |
+| `/settings_changed` | String | nav_node, camera_node | Subscribe | Reload calibration from disk |
+| `/detections` | String | camera_node | Publish | Detection list (backup, JSON) |
+| `/detector_mode` | String | camera_node | Publish | Current detector mode |
+| `/drpai_restart` | String | camera_node | Subscribe | Restart DRP-AI subprocess |
+
+Note: Primary data flow uses struct SHM, not ROS2 topics. GUI has no ROS2.
 
 ## License
 

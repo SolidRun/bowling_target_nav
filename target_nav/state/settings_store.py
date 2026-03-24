@@ -4,9 +4,10 @@ SettingsStore holds all detection, calibration, geometry, navigation, and
 map display state behind a single RLock.
 
 Architecture:
-    SharedState owns one SettingsStore instance used by the GUI. ROS2 nodes
-    each create their own SettingsStore for local settings; setting changes
-    are communicated via the /settings_changed ROS2 topic.
+    SharedState owns one SettingsStore instance used by the GUI. Nav and
+    Camera processes each create their own SettingsStore for local settings;
+    setting changes are communicated via CmdRingBuffer (struct SHM) for Nav
+    and /settings_changed ROS2 topic for Camera.
 
 Thread safety:
     A single RLock protects all state.  ``_try_lock()`` uses a 0.1 s timeout

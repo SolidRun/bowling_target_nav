@@ -28,8 +28,8 @@ out of frame, making vision distance unreliable).
 All velocity commands are published through ``_publish_cmd`` which sanitizes
 NaN/Inf and enforces speed caps.
 
-Runs in: ROS2 control_loop timer callback (single-threaded) inside the
-main ROS process.
+Runs in: Nav process (Process 1, Core 1) -- ROS2 control_loop timer
+callback (single-threaded).
 
 Cross-references:
   - ``nav/obstacle_avoidance.py`` -- VFH mixin

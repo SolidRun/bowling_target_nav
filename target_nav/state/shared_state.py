@@ -1,4 +1,4 @@
-"""Top-level shared state facade for single-process (threading) mode.
+"""Top-level shared state facade for the GUI process.
 
 SharedState composes three domain stores -- SensorStore (map, pose, laser),
 SettingsStore (camera frames, calibration, filters, nav/map params), and
@@ -23,20 +23,25 @@ Ownership model / delegation:
     GUI code reads all three stores. The Navigator reads sensors + detection
     and writes nav. The camera worker writes detection (frames/detections).
 
-Architecture:
-    The GUI process owns one SharedState singleton created in
+Architecture (3-process, lock-free struct SHM):
+    The GUI process (Core 0) owns one SharedState singleton created in
     ``state/__init__.py``.  Each domain store uses its own RLock with a
-    0.1 s timeout so the GUI thread never blocks indefinitely.  ROS2 nodes
-    run in separate processes and communicate via ROS2 topics; a lightweight
-    SHM poll thread populates SharedState from struct shared memory.
+    0.1 s timeout so the GUI thread never blocks indefinitely.  Nav and
+    Camera processes run on separate cores and communicate via lock-free
+    SPSC struct SHM channels (no Bridge process, no JSON for real-time
+    data).  A lightweight SHM poll daemon thread reads struct SHM from
+    Nav (NavShmReader, LaserShmReader) and Camera (DetShmReader) and
+    populates SharedState for the GTK panels to read.  GUI commands are
+    written to a CmdRingBuffer in SHM for the Nav process to consume.
 
-Runs in: GUI process (Process 0). Created once at startup.
+Runs in: GUI process (Process 0, Core 0). Created once at startup.
 
 Related modules:
     state/sensor_store.py   -- SensorStore implementation.
     state/settings_store.py -- SettingsStore implementation.
     state/nav_store.py      -- NavStore implementation.
     state/command_dispatcher.py -- routes send_ros_command() calls.
+    ipc/shm_struct.py       -- struct-based SHM readers/writers.
 
 Thread safety:
     ``_shutdown_event`` is a threading.Event (inherently thread-safe).

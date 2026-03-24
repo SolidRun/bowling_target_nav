@@ -274,6 +274,13 @@ class DrpBinaryDetector(DetectorBase):
             cwd=os.path.dirname(self.binary_path),
         )
 
+        # Pin C++ binary to Core 3 so it can't steal CPU from nav (Core 1)
+        try:
+            os.sched_setaffinity(self._proc.pid, {3})
+            logger.info("DRP-AI pipe pinned to Core 3 (pid=%d)", self._proc.pid)
+        except OSError:
+            pass
+
         # Wait for READY signal (raises on timeout or premature exit)
         try:
             _wait_for_ready(self._proc, self.startup_timeout, 'pipe')
@@ -450,6 +457,13 @@ class DrpStreamDetector:
             bufsize=0,
             cwd=os.path.dirname(self.binary_path),
         )
+
+        # Pin C++ binary to Core 3 so it can't steal CPU from nav (Core 1)
+        try:
+            os.sched_setaffinity(self._proc.pid, {3})
+            logger.info("DRP-AI stream pinned to Core 3 (pid=%d)", self._proc.pid)
+        except OSError:
+            pass
 
         # Wait for READY signal
         try:

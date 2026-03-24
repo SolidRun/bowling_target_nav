@@ -2,7 +2,9 @@
 
 ## 1. Overview
 
-target_nav is a ROS2 package that detects targets with DRP-AI hardware-accelerated inference and navigates a mecanum-wheeled robot to the nearest target using odometry-only localization.
+target_nav is a ROS2 package that detects bowling-pins with DRP-AI hardware-accelerated inference and navigates a mecanum-wheeled robot to the nearest target using odometry-only localization.
+
+**Target:** bowling-pin (0.28m height x 0.08m width). Distance estimation via Python pinhole model (not C++).
 
 **Hardware:** Renesas RZ/V2N SoC (4x Cortex-A55, DRP-AI accelerator), RPLidar A1, USB camera, Arduino-controlled mecanum drivetrain.
 
@@ -12,208 +14,142 @@ target_nav is a ROS2 package that detects targets with DRP-AI hardware-accelerat
 
 ```
 target_nav/
-├── config/          # Configuration files
-├── launch/          # ROS2 launch files (bringup)
+├── launch/          # ROS2 launch files (bringup, record)
 ├── urdf/            # Robot URDF model
 ├── target_nav/      # Python package
 │   ├── config.py    # Single source of truth for all parameters
 │   ├── app/         # Entry points and workers
-│   ├── nav/         # Navigation algorithms
+│   ├── nav/         # Navigation algorithms (VFH, blind, search, arrival)
 │   ├── detectors/   # DRP-AI detection pipeline
 │   ├── hardware/    # Arduino, Camera, LiDAR drivers
-│   ├── gui/         # GTK3 interface
-│   ├── state/       # Thread-safe shared state
+│   ├── gui/         # GTK3 interface (panels/, settings_tabs/)
+│   ├── state/       # Thread-safe shared state (stores + dispatcher)
+│   ├── ipc/         # Lock-free struct SHM readers/writers
 │   └── utils/       # Distance estimation, logging
 ├── drpai/           # C++ DRP-AI source
 ├── deploy/          # Pre-built DRP-AI binary + model
 ├── scripts/         # Shell scripts (start, sync, setup)
-├── tools/           # PC-side robot controller
-└── test/            # Tests
+└── test/            # Tests (unit/, utils/)
 ```
 
 ---
 
-## 3. Process Architecture (4 Cores)
+## 3. Process Architecture (3-process, lock-free struct SHM)
 
-Each ROS2 node is pinned to a CPU core to prevent contention on the quad-core A55.
+3 Python processes pinned to CPU cores with lock-free SPSC struct SHM IPC. No Bridge process, no JSON for real-time data.
 
 ```
-Core 0: GUI node       -- GTK rendering, subscribes to ROS2 topics
-Core 1: nav_node       -- Navigator, publishes /cmd_vel
-Core 2: camera_node    -- DRP-AI detection, publishes /detections
-Core 3: arduino_node + odometry_node
+Core 0: GUI process      -- Pure GTK, reads struct SHM directly, no ROS2
+Core 1: Nav process      -- ROS2 navigation, Kalman tracker, motor commands (nice -5)
+Core 2: Camera process   -- DRP-AI subprocess management, detection tracking
+Core 3: DRP-AI C++ binary -- YOLO inference (pinned to isolate heavy CPU from nav)
 ```
 
-- **Core 0 (GUI):** Runs the GTK3 fullscreen interface. Subscribes to `/detections`, `/nav_state`, `/scan`, and TF. Publishes `/nav_command` for user GO/STOP actions.
-- **Core 1 (Navigator):** Runs the custom Navigator at 20 Hz. Subscribes to `/detections`, LiDAR, and TF. Publishes `/cmd_vel` and `/nav_state`.
-- **Core 2 (Camera):** Captures frames, runs DRP-AI inference via the C++ binary, publishes `/detections`.
-- **Core 3 (Drivers):** Arduino motor driver and wheel odometry share the last core. These are lightweight or I/O-bound.
+- **Core 0 (GUI):** Pure GTK3 fullscreen interface. A SHM poll daemon thread reads struct SHM from Nav and Camera processes and populates a local SharedState. GUI commands (GO, STOP) are written to a CmdRingBuffer in SHM. No ROS2 in this process.
+- **Core 1 (Nav, nice -5):** ROS2 node with TF2, 20 Hz control loop (NavController + Navigator), Kalman-filtered target tracker, VFH obstacle avoidance, blind approach, spiral search. Reads detections from DetShmReader, commands from CmdRingBuffer. Writes nav state via NavShmWriter and LiDAR via LaserShmWriter.
+- **Core 2 (Camera):** Manages the C++ DRP-AI subprocess. Reads detection structs from C++ SHM, applies temporal tracking (DetectionTracker), computes distance via Python pinhole model, writes to DetShmWriter for both Nav and GUI.
+- **Core 3 (DRP-AI C++):** The `app_yolo_cam` binary captures camera frames, runs YOLO inference on DRP-AI hardware, writes raw BGR frames to `/dev/shm/v2n_camera` and detection structs to `/dev/shm/v2n_detections`.
 
 ---
 
-## 4. Data Flow
+## 4. Data Flow (all struct SHM, no JSON for real-time data)
 
-### ROS2 Topics
+### Lock-free struct SHM channels (Python-to-Python)
 
-| Topic | Publisher | Subscribers | Type |
-|-------|-----------|-------------|------|
-| `/detections` | camera_node | nav_node, GUI | Custom detection msg |
-| `/nav_state` | nav_node | GUI | Navigation state info |
-| `/nav_command` | GUI | nav_node | GO / STOP commands |
-| `/cmd_vel` | nav_node | arduino_node | `geometry_msgs/Twist` |
-| `/scan` | rplidar_ros | nav_node, GUI | `sensor_msgs/LaserScan` |
-| `/odom` | odometry_node | nav_node, GUI | `nav_msgs/Odometry` |
-| TF: `odom->base_link` | odometry_node | nav_node, GUI | TF2 |
-| TF: `base_link->laser` | robot_state_publisher | all | TF2 (static) |
+| SHM Path | Writer | Reader(s) | Content | Protocol |
+|----------|--------|-----------|---------|----------|
+| `/dev/shm/v2n_det` | Camera (Core 2) | Nav (Core 1), GUI (Core 0) | Detection structs | SPSC, seq sandwich |
+| `/dev/shm/v2n_nav` | Nav (Core 1) | GUI (Core 0) | Nav state snapshot | SPSC, seq sandwich |
+| `/dev/shm/v2n_laser` | Nav (Core 1) | GUI (Core 0) | LiDAR points + pose | SPSC, seq sandwich |
+| `/dev/shm/v2n_cmd` | GUI (Core 0) | Nav (Core 1) | Command ring buffer | SPSC ring, seq per slot |
 
-### Shared Memory (`/dev/shm`)
-
-The C++ DRP-AI binary and Python camera node communicate through shared memory for zero-copy frame and detection transfer:
+### C++ DRP-AI shared memory (C++-to-Python)
 
 | SHM Path | Writer | Reader | Content |
 |----------|--------|--------|---------|
-| `/dev/shm/v2n_camera` | C++ DRP-AI | camera_node | Raw camera frames |
-| `/dev/shm/v2n_detections` | C++ DRP-AI | camera_node | Detection results (JSON) |
-| `/dev/shm/v2n_calibration` | camera_node | C++ DRP-AI | Runtime calibration params |
+| `/dev/shm/v2n_camera` | C++ DRP-AI (Core 3) | GUI (Core 0) | Raw BGR frames |
+| `/dev/shm/v2n_detections` | C++ DRP-AI (Core 3) | Camera (Core 2) | Detection binary structs |
+| `/dev/shm/v2n_calibration` | Camera (Core 2) | C++ DRP-AI (Core 3) | Calibration params |
+
+### ROS2 topics (Nav + Camera processes, backup path)
+
+| Topic | Publisher | Subscriber | Type |
+|-------|-----------|------------|------|
+| `/scan` | rplidar_ros | nav_node | `sensor_msgs/LaserScan` |
+| `/cmd_vel` | nav_node | arduino_node | `geometry_msgs/Twist` |
+| `/arduino/cmd` | nav_node | arduino_node | `std_msgs/String` |
+| `/reset_odom` | nav_node | odometry_node | `std_msgs/Empty` |
+| `/nav_state` | nav_node | (backup) | `std_msgs/String` (JSON) |
+| `/settings_changed` | GUI (via SHM cmd) | nav_node, camera_node | `std_msgs/String` |
+| `/detections` | camera_node | (backup) | `std_msgs/String` (JSON) |
+| `/detector_mode` | camera_node | (info) | `std_msgs/String` |
+| `/drpai_restart` | GUI (via SHM cmd) | camera_node | `std_msgs/String` |
+| TF: `odom->base_link` | odometry_node | nav_node | TF2 |
+| TF: `base_link->camera_link` | nav_node (static) | — | TF2 |
+| TF: `base_link->laser` | nav_node (static) | — | TF2 |
+
+Note: The GUI has no ROS2 dependency. All GUI data comes from struct SHM.
+
+### Data flow diagram
+
+```
+Camera (Core 2) --DetShmWriter--> Nav (Core 1) via DetShmReader [20Hz poll]
+Camera (Core 2) --DetShmWriter--> GUI (Core 0) via DetShmReader [20Hz poll]
+Camera (Core 2) --/dev/shm/v2n_camera--> GUI (Core 0) [raw BGR frames from C++]
+Nav (Core 1) --NavShmWriter--> GUI (Core 0) via NavShmReader [20Hz poll]
+Nav (Core 1) --LaserShmWriter--> GUI (Core 0) via LaserShmReader [20Hz poll]
+GUI (Core 0) --CmdRingBuffer.push()--> Nav (Core 1) via CmdRingBuffer.pop() [20Hz poll]
+```
 
 ---
 
-## 5. How Data Sync Works — Step by Step
+## 5. Lock-free Protocol
 
-The system has no shared memory between Python processes. Each process runs
-independently with its own memory space. Data moves between them through two
-mechanisms: **ROS2 topics** (Python-to-Python) and **`/dev/shm`** (C++-to-Python).
+Every struct SHM channel uses SPSC (Single Producer, Single Consumer) with torn-read protection:
+
+1. Writer increments a monotonic sequence counter.
+2. Writer writes `seq_start` to the buffer header.
+3. Writer fills the payload via `struct.pack_into`.
+4. Writer writes `seq_end = seq_start` to the buffer trailer.
+5. Reader checks `seq_start == seq_end` and `seq != last_seen_seq`.
+6. If torn (seq_start != seq_end), reader returns None and retries next tick.
+
+No locks, no mutexes, no CAS. The SPSC invariant guarantees correctness.
 
 ### Full Detection-to-Motor Flow
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│ CORE 2: camera_node                                                      │
-│                                                                          │
-│  1. C++ DRP-AI binary captures a camera frame (640x480 BGR, 30 fps)     │
-│     └─ Uses V4L2 to read from /dev/video0                               │
-│     └─ Runs YOLO inference on DRP-AI hardware accelerator (not CPU)     │
-│                                                                          │
-│  2. C++ writes results to shared memory:                                 │
-│     └─ /dev/shm/v2n_camera:     annotated frame with bounding boxes     │
-│     └─ /dev/shm/v2n_detections: binary struct [confidence, bbox, ...]   │
-│                                                                          │
-│  3. Python camera_worker reads /dev/shm/v2n_detections (zero-copy mmap) │
-│     └─ Parses binary structs into Det dataclass objects                  │
-│     └─ Applies temporal tracking (DetectionTracker: min 3 consecutive   │
-│        frames before accepting, smooths bbox jitter)                    │
-│     └─ Estimates distance from bounding box height using calibration     │
-│        formula: distance = (ref_distance * ref_box_height) / box_height │
-│     └─ Estimates angle from bbox center offset vs frame center          │
-│                                                                          │
-│  4. camera_node publishes to /detections (std_msgs/String, JSON):       │
-│     {"detections": [{"confidence": 0.82, "bbox": [120,80,200,350],      │
-│       "distance": 1.35, "angle": -0.12, "class_name": "bowling-pin",        │
-│       "bbox_clipped": false}], "info": "1 bowling-pin", "timestamp": ...}    │
-│                                                                          │
-└──────────────────────────┬───────────────────────────────────────────────┘
-                           │ ROS2 topic: /detections
-                           │ (DDS delivers a copy to each subscriber)
-              ┌────────────┴────────────┐
-              ▼                         ▼
-┌─────────────────────────┐  ┌─────────────────────────┐
-│ CORE 1: nav_node        │  │ CORE 0: GUI             │
-│                         │  │                         │
-│ 5. detections_cb()      │  │ 5'. _detections_cb()    │
-│    parses JSON           │  │     stores list for     │
-│    converts to Det       │  │     status bar display  │
-│    objects, stores in    │  │                         │
-│    local SharedState     │  │                         │
-│                         │  │                         │
-│ 6. control_loop (20 Hz) │  │                         │
-│    └─ NavController      │  │                         │
-│       reads detections   │  │                         │
-│                         │  │                         │
-│ 7. TF2 lookup:          │  │                         │
-│    odom → base_link      │  │                         │
-│    Gets robot pose       │  │                         │
-│    (x, y, theta) in     │  │                         │
-│    odom frame            │  │                         │
-│                         │  │                         │
-│ 8. Project detection     │  │                         │
-│    to odom frame:        │  │                         │
-│    goal_x = robot_x      │  │                         │
-│      + dist * cos(θ+α)  │  │                         │
-│    goal_y = robot_y      │  │                         │
-│      + dist * sin(θ+α)  │  │                         │
-│    (θ = robot heading,   │  │                         │
-│     α = detection angle) │  │                         │
-│                         │  │                         │
-│ 9. Navigator computes    │  │                         │
-│    velocity command:     │  │                         │
-│    └─ Angle to goal →    │  │                         │
-│       angular velocity   │  │                         │
-│    └─ Distance to goal → │  │                         │
-│       linear velocity    │  │                         │
-│    └─ VFH checks LiDAR  │  │                         │
-│       for obstacles →    │  │                         │
-│       may adjust heading │  │                         │
-│                         │  │                         │
-│ 10. Publishes:           │  │                         │
-│     /cmd_vel (Twist)     │  │                         │
-│     /nav_state (JSON)  ──┼──┼──▶ 10'. GUI updates    │
-│                         │  │       status bar,       │
-│                         │  │       map overlay       │
-└────────────┬────────────┘  └─────────────────────────┘
-             │ ROS2 topic: /cmd_vel
-             ▼
-┌─────────────────────────┐
-│ CORE 3: arduino_node    │
-│                         │
-│ 11. cmd_vel_cb()        │
-│     converts Twist      │
-│     (m/s) to PWM:       │
-│     vx_pwm = vx * scale │
-│     vy_pwm = vy * scale │
-│     wz_pwm = wz * scale │
-│                         │
-│ 12. Sends serial:       │
-│     "VEL,vx,vy,wz\n"   │
-│     to Arduino via      │
-│     /dev/ttyACM0        │
-│                         │
-│ 13. Arduino firmware    │
-│     runs mecanum IK:    │
-│     FL = vx - vy - wz   │
-│     RL = vx + vy - wz   │
-│     RR = vx - vy + wz   │
-│     FR = vx + vy + wz   │
-│     → 4 motors spin     │
-│                         │
-│ 14. Encoders feed back: │
-│     Arduino sends       │
-│     "ODOM,vx,vy,wz"    │
-│     → odometry_node     │
-│     → publishes /odom   │
-│     → updated TF        │
-│       odom → base_link  │
-│     → nav_node uses     │
-│       updated pose at   │
-│       step 7 next tick  │
-└─────────────────────────┘
+1. C++ DRP-AI binary (Core 3) captures frame, runs YOLO inference
+   -> Writes detection structs to /dev/shm/v2n_detections
+   -> Writes raw BGR frame to /dev/shm/v2n_camera
+
+2. Python camera_worker (Core 2) reads /dev/shm/v2n_detections
+   -> Temporal tracking (DetectionTracker)
+   -> Shape validation (bowling-pin width/height ratio)
+   -> Python pinhole distance estimation
+   -> Writes to DetShmWriter (/dev/shm/v2n_det)
+
+3. Nav process (Core 1) polls DetShmReader at 20 Hz
+   -> TargetTracker: size-distance gate, LiDAR matching, Kalman filter
+   -> NavController state machine: NAVIGATING / SEARCHING / BLIND_APPROACH
+   -> Navigator: VFH obstacle avoidance, holonomic velocity commands
+   -> Publishes /cmd_vel (Twist)
+   -> Writes nav state to NavShmWriter (/dev/shm/v2n_nav)
+   -> Writes LiDAR points to LaserShmWriter (/dev/shm/v2n_laser)
+
+4. Arduino node (launched by bringup) converts Twist to PWM
+   -> Sends "VEL,vx,vy,wz\n" to Arduino firmware
+   -> Firmware runs mecanum IK -> 4 motors spin
+   -> Encoders feed back "ODOM,vx,vy,wz" -> odometry_node
+   -> TF: odom -> base_link updated
+
+5. GUI (Core 0) SHM poll thread reads at 20 Hz:
+   -> NavShmReader -> SharedState.nav (status bar, map overlay)
+   -> LaserShmReader -> SharedState.sensors (radar view)
+   -> DetShmReader -> SharedState.detection (camera panel info bar)
+   -> /dev/shm/v2n_camera -> camera panel (raw BGR via mmap)
+   -> GUI commands -> CmdRingBuffer.push() -> Nav polls at 20 Hz
 ```
-
-### GUI Frame Display (separate path, no ROS2)
-
-The video feed in the GUI does NOT go through ROS2 — it would be too slow
-for 921 KB frames at 30 fps. Instead:
-
-```
-C++ binary writes annotated frame → /dev/shm/v2n_camera (zero-copy mmap)
-                                            │
-GUI reads directly via mmap ────────────────┘
-  └─ _DirectShmReader in camera_panel.py
-  └─ Converts BGR → Cairo surface
-  └─ Renders at ~10 fps (GUI refresh rate)
-```
-
-This is the only remaining shared memory path between processes.
-All other data flows through standard ROS2 topics.
 
 ### Timing Summary
 
@@ -221,30 +157,17 @@ All other data flows through standard ROS2 topics.
 |-----------|------|---------|
 | Camera capture | 30 fps | ~33 ms per frame |
 | DRP-AI inference | ~10 fps | ~100 ms per inference |
-| /detections publish | ~10 Hz | ~1-2 ms (local DDS) |
+| Struct SHM write/read | 20 Hz | <1 ms (mmap, no serialization) |
 | Navigator control loop | 20 Hz | ~50 ms per tick |
-| /cmd_vel publish | 20 Hz | ~1-2 ms (local DDS) |
 | Arduino serial | 200 Hz watchdog | ~5 ms per command |
 | Encoder feedback | 20 Hz | ~50 ms per update |
 | GUI render | 10 fps | ~100 ms per frame |
-
-### Why ROS2 Topics Instead of Custom IPC
-
-The previous architecture used a custom ``IPCHub`` with shared memory,
-multiprocessing locks, and sync threads (1900 lines of code). This was
-replaced with standard ROS2 topics because:
-
-1. **Zero custom code** — ROS2 DDS handles serialization, delivery, ordering.
-2. **Debuggable** — run ``ros2 topic echo /detections`` from any terminal.
-3. **Extensible** — adding a new subscriber is one line (``create_subscription``).
-4. **Same latency** — on the same machine, DDS uses loopback shared memory (~1-2 ms).
-5. **Standard** — any robotics engineer understands pub/sub topics.
 
 ---
 
 ## 6. Why Custom Navigator Instead of Nav2?
 
-1. **Nav2 is for static goal navigation** -- it takes a fixed (x, y) coordinate and plans a path. Our use case is "find and approach a visually detected target" -- a closed-loop camera-to-motor control workflow that Nav2 does not support.
+1. **Nav2 is for static goal navigation** -- it takes a fixed (x, y) coordinate and plans a path. Our use case is "find and approach a visually detected bowling-pin" -- a closed-loop camera-to-motor control workflow that Nav2 does not support.
 
 2. **Dynamic goal refinement** -- the camera continuously refines the target's map position every frame. Nav2's NavigateToPose action expects a fixed goal; canceling and resending causes path planner jitter and delays.
 
@@ -252,7 +175,7 @@ replaced with standard ROS2 topics because:
 
 4. **Camera feedback for arrival** -- our Navigator uses bounding-box size, clipping state, and LiDAR fusion to detect arrival through temporal multi-signal confirmation. Nav2 only checks odometry distance to the goal point.
 
-5. **Resource constraints** -- the V2N board runs an ARM Cortex-A55 with limited CPU and RAM. The 8 Nav2 nodes (controller_server, planner_server, bt_navigator, smoother_server, behavior_server, waypoint_follower, velocity_smoother, collision_monitor) add ~200 MB RAM and significant CPU overhead. DRP-AI detection already consumes most available resources.
+5. **Resource constraints** -- the V2N board runs an ARM Cortex-A55 with limited CPU and RAM. The 8 Nav2 nodes add ~200 MB RAM and significant CPU overhead. DRP-AI detection already consumes most available resources.
 
 6. **We still use the ROS2 ecosystem** -- TF2 for coordinate transforms, robot_state_publisher for the URDF TF tree, odometry for localization. Only the Nav2 navigation stack was removed.
 
@@ -263,15 +186,16 @@ replaced with standard ROS2 topics because:
 The Navigator runs a 20 Hz control loop with these stages:
 
 ```
-detect --> map goal --> navigate --> refine --> blind approach --> arrive
+detect --> Kalman track --> map goal --> navigate --> refine --> blind approach --> arrive
 ```
 
-1. **Detect:** Camera node publishes a detection with bounding box, confidence, estimated distance, and bearing angle.
-2. **Odom goal:** Navigator projects the detection into the odom frame using the robot's current pose and the estimated distance/angle, producing a (x, y) goal in odom coordinates.
-3. **Navigate:** The robot drives toward the goal using holonomic control (mecanum wheels allow simultaneous forward + strafe + rotate). VFH obstacle avoidance steers around obstacles detected by LiDAR.
-4. **Refine:** Each new detection updates the goal. The robot continuously corrects its trajectory as the camera refines the target's position.
-5. **Blind approach:** When the target drops below the LiDAR's minimum range (~0.15 m) or the bounding box clips the frame edge, the Navigator switches to dead-reckoning toward the last known goal using odometry only.
-6. **Arrive:** Arrival is confirmed through multi-signal temporal fusion: bounding-box size exceeding threshold, bbox clipping the frame bottom, and LiDAR distance below threshold -- sustained for 0.3 s to prevent false positives.
+1. **Detect:** Camera process writes detections to struct SHM. Nav process reads via DetShmReader at 20 Hz.
+2. **Track:** TargetTracker validates detections (size-distance gate, shape filter), matches with LiDAR, and runs a Kalman filter for smoothed position.
+3. **Odom goal:** Navigator projects the tracked target into the odom frame using the robot's current pose, producing a (x, y) goal in odom coordinates.
+4. **Navigate:** The robot drives toward the goal using holonomic control (mecanum wheels allow simultaneous forward + strafe + rotate). VFH obstacle avoidance steers around obstacles detected by LiDAR.
+5. **Refine:** Each new detection updates the Kalman state and the odom goal. The robot continuously corrects its trajectory.
+6. **Blind approach:** When the target drops below the LiDAR's minimum range (~0.15 m) or the bounding box clips the frame edge, the Navigator switches to dead-reckoning toward the last known goal using odometry only.
+7. **Arrive:** Arrival is confirmed through multi-signal temporal fusion: smallest distance from all sources stays within approach_distance for 0.3 s.
 
 ### State Transitions
 
@@ -284,8 +208,8 @@ IDLE --> NAVIGATING --> BLIND_APPROACH --> ARRIVED
 ```
 
 - **IDLE:** Waiting for user GO command.
-- **NAVIGATING:** Driving toward a visible target with obstacle avoidance.
-- **SEARCHING:** Target lost for > 3 s; executing a 360-degree rotation scan.
+- **NAVIGATING:** Driving toward a visible bowling-pin with obstacle avoidance.
+- **SEARCHING:** Target lost for > lost_timeout; 360-degree rotation scan, then spiral.
 - **BLIND_APPROACH:** Target below LiDAR min range; dead-reckoning to last known position.
 - **ARRIVED:** Target reached. Terminal state; requires user GO to restart.
 
@@ -298,15 +222,15 @@ The camera and LiDAR are mounted at different positions on the robot. This creat
 ```
         Camera (forward-facing, elevated)
            |
-           |  camera_offset_x (forward from base_link)
+           |  camera_offset_x = 0.15m (forward from base_link)
            |
-      base_link ---- LiDAR (center of robot)
+      base_link ---- LiDAR (offset_x = 0.12m forward)
 ```
 
-- **Camera distance:** Estimated from bounding-box height using a reference-point calibration model. Less accurate but works at all ranges.
+- **Camera distance:** Estimated from bounding-box height using a Python pinhole model with reference-point calibration. Less accurate but works at all ranges.
 - **LiDAR distance:** Measured directly from the laser scan at the detection's bearing angle. Accurate but has a 0.15 m minimum range (blind zone).
-- **Fusion rule:** Use LiDAR distance when available (> 0.15 m and valid reading at the target angle). Fall back to vision distance otherwise.
-- **Reference points:** The distance estimator supports two reference points -- "front" (bumper) and "center" (base_link). The chosen reference affects the arrival distance threshold.
+- **Fusion rule (TargetTracker):** LiDAR distance is preferred when a matching obstacle is found within the angular and distance window. Camera distance is used otherwise. The Kalman filter uses lower measurement noise for LiDAR-confirmed readings.
+- **Reference points:** The distance estimator supports four reference points: "center" (base_link), "front" (bumper), "camera", and "lidar". The chosen reference affects the arrival distance threshold.
 - **Blind zone:** Below ~0.15 m from the LiDAR, only vision and odometry are available. The blind approach phase handles this region.
 
 ---
@@ -321,6 +245,7 @@ All compile-time constants live in `target_nav/config.py`:
 - Hardware settings (serial ports, baud rates, camera resolution)
 - Detection parameters (confidence threshold, expiry time)
 - Sensor geometry (camera/LiDAR offsets)
+- Target profile (bowling-pin: 0.28m height, 0.08m width)
 - Process affinity (core assignments)
 
 ### Runtime Settings: `SettingsStore`
@@ -353,5 +278,5 @@ Runtime settings are persisted to `~/.config/target_nav/calibration.json`. Chang
 | Package | Purpose |
 |---------|---------|
 | **robot_state_publisher** | Publishes the URDF TF tree (`base_link->laser`, `base_link->camera_link`, wheel frames). |
-| **TF2** | Coordinate frame transforms used by Navigator and GUI for map-frame reasoning. |
+| **TF2** | Coordinate frame transforms used by Navigator for odom-frame goal computation. |
 | **rplidar_ros** | Driver for the RPLidar A1, publishes `/scan`. |

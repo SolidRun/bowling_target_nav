@@ -140,7 +140,7 @@ class NavNode(Node):
         self._last_lidar_pos = None
         self.create_timer(0.5, self._publish_sensor_tfs)   # 2 Hz
 
-        # Struct SHM writers (nav -> GUI, bypasses Bridge process)
+        # Struct SHM writers (nav -> GUI, lock-free SPSC)
         try:
             self._nav_shm = NavShmWriter()
             self._laser_shm = LaserShmWriter()
@@ -156,7 +156,7 @@ class NavNode(Node):
             self.get_logger().warning(f'Failed to create DetShmReader: {e}')
             self._det_reader = None
 
-        # Command ring buffer (GUI -> nav, bypasses Bridge process)
+        # Command ring buffer (GUI -> nav, lock-free SPSC)
         try:
             self._cmd_ring = CmdRingBuffer.open()
         except Exception as e:
@@ -657,12 +657,13 @@ def main():
     The node runs until rclpy is shut down (e.g. via Ctrl+C or
     ros2 lifecycle).
     """
-    # Pin to CPU core 1
+    # Pin to CPU core 1 with elevated priority so DRP-AI can't starve it
     try:
         os.sched_setaffinity(0, {1})
-        logger.info("Pinned to core 1")
+        os.nice(-5)  # higher priority than default (0)
+        logger.info("Pinned to core 1 (nice=-5)")
     except Exception:
-        logger.warning("Could not pin to core 1")
+        logger.warning("Could not pin to core 1 or set priority")
 
     # Ignore SIGINT in child -- parent/launch handles it
     signal.signal(signal.SIGINT, signal.SIG_IGN)

@@ -50,7 +50,7 @@
 | Wheelbase | 190 mm | Front-rear axle distance |
 | Track width | 210 mm | Left-right wheel distance |
 | LiDAR height | 150 mm above base | Mounted on top |
-| Camera offset | 120 mm forward, 100 mm above base | Front-facing |
+| Camera offset | 150 mm forward, 100 mm above base | Front-facing |
 
 ### Wheel Layout (Top View)
 
@@ -340,10 +340,10 @@ The robot's physical dimensions are defined in `urdf/v2n_robot.urdf`.
 base_footprint (ground plane)
   └── base_link (robot center, 0mm above ground)
       ├── laser (LiDAR sensor)
-      │   Position: (0, 0, +150mm) — centered, 15cm above base
+      │   Position: (+120mm, 0, +150mm) — 12cm forward, 15cm above base
       │
       ├── camera_link (front camera)
-      │   Position: (+120mm, 0, +100mm) — 12cm forward, 10cm above
+      │   Position: (+150mm, 0, +100mm) — 15cm forward, 10cm above
       │
       ├── wheel_fl (front-left wheel)
       │   Position: (+95mm, +105mm, 0) — visual only

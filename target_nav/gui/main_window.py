@@ -7,8 +7,8 @@ Provides the MainGUI class which renders a split-panel display:
 The window includes a bottom control bar with GO/STOP buttons, a live
 navigation status label (Pango markup), and buttons for settings and quit.
 Rendering is delegated to panel functions in ``gui/panels/``. All robot
-state is accessed through the shared_state facade (works in both
-SharedState populated by a ROS2 bridge node).
+state is accessed through the shared_state facade (populated by a
+SHM poll daemon thread that reads struct SHM from Nav and Camera processes).
 
 Runs in: GUI process (Process 0) on the GTK main thread.
 

@@ -1,8 +1,9 @@
 """Route GUI commands to the appropriate state/ROS actions.
 
 Dispatches command dictionaries from the GUI to the navigation state machine,
-settings store, and ROS publishers. Used in both threading mode (direct call)
-and multiprocess mode (received via /nav_command topic).
+settings store, and ROS publishers. In 3-process mode, the GUI writes
+commands to a CmdRingBuffer (lock-free SPSC struct SHM), the Nav process
+polls CmdRingBuffer.pop() at 20 Hz and calls dispatch_command().
 
 Supported command types (cmd_dict['type'] -> payload keys):
     go               -- Start navigation. Sets GO flag, resets bbox filter.
@@ -15,10 +16,10 @@ Supported command types (cmd_dict['type'] -> payload keys):
     test_motor       -- Test one motor at PWM. Keys: 'motor' (str), 'pwm' (int).
     test_motor_twist -- Publish Twist directly. Keys: 'vx', 'vy', 'wz' (float).
 
-Runs in: GUI process (threading mode) or ROS process (multiprocess mode).
+Runs in: Nav process (Core 1), called from NavNode._poll_commands().
 
 Related modules:
-    state/shared_state.py  -- calls dispatch_command() from send_ros_command().
+    ipc/shm_struct.py      -- CmdRingBuffer for GUI -> Nav commands.
     gui/settings_tabs/     -- builds cmd_dicts sent here.
 """
 

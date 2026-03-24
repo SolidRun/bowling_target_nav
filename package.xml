@@ -4,7 +4,7 @@
   <name>target_nav</name>
   <version>1.0.0</version>
   <description>
-    Vision-based target detection and autonomous navigation for bottle target approach.
+    Vision-based bowling-pin detection and autonomous navigation for target approach.
     Modular design allows swapping detection backends (YOLO, custom binary, etc.)
   </description>
   <maintainer email="robot@rzv2n.local">RZ/V2N Robot</maintainer>
@@ -21,9 +21,6 @@
   <depend>nav_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_geometry_msgs</depend>
-
-  <!-- Navigation -->
-  <exec_depend>nav2_msgs</exec_depend>
 
   <!-- LiDAR Driver -->
   <exec_depend>rplidar_ros</exec_depend>

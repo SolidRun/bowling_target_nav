@@ -146,9 +146,9 @@ ros2 topic echo /odom --once
 
 ```
 ┌─────────────────────────────────────────────────┐
-│ Core 3: Infrastructure                           │
+│ Infrastructure (launched by bringup.launch.py)   │
 │   arduino_driver_node  → motor control (serial)  │
-│   odometry_node        → encoder → /odom + TF    │
+│   odometry_node        → encoder → odom TF       │
 │   robot_state_publisher→ URDF → TF tree          │
 │   rplidar_node         → LiDAR → /scan           │
 └─────────────────────────────────────────────────┘
@@ -157,14 +157,17 @@ When GUI starts (user clicks "Start"):
 
 ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
 │ Core 0: GUI      │  │ Core 1: nav_node │  │ Core 2: camera   │
-│                  │  │                  │  │                  │
+│                  │  │  (nice -5)       │  │                  │
 │ GTK3 window      │  │ Navigator        │  │ DRP-AI C++ binary│
 │ Map + camera     │  │ Obstacle avoid   │  │ YOLO detection   │
-│ Settings panel   │  │ Blind approach   │  │                  │
-│                  │  │ Search scan      │  │ /dev/shm frames  │
-│ ←── /nav_state ──│  │── /cmd_vel ────→ │  │── /detections ──→│
-│ ──→ /nav_command │  │←── /detections   │  │                  │
+│ Settings panel   │  │ Blind approach   │  │ (Core 3)         │
+│                  │  │ Search scan      │  │                  │
+│ ←─ NavShmReader  │  │── /cmd_vel ────→ │  │─ DetShmWriter ──→│
+│ ←─ LaserShmReader│  │←─ DetShmReader   │  │ /dev/shm frames  │
+│ ─→ CmdRingBuffer │  │←─ CmdRingBuffer  │  │                  │
 └──────────────────┘  └──────────────────┘  └──────────────────┘
+
+Note: GUI has NO ROS2. All GUI data flows through struct SHM.
 ```
 
 ---

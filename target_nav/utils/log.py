@@ -7,9 +7,9 @@ output is consistently formatted and filterable by component.
 
 Architecture:
     ``setup_logging()`` is called once from the main entry point
-    (``main_gui.py``).  Every other module calls ``get_logger(name)`` at
-    import time.  In multiprocess mode each child process inherits the
-    root logger configuration from fork.
+    (``app/main.py``).  Every other module calls ``get_logger(name)`` at
+    import time.  In 3-process mode each child process (Nav, Camera)
+    re-inherits the root logger configuration from spawn.
 
 Key functions:
     get_logger    -- return a named ``logging.Logger``.

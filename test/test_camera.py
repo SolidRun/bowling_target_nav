@@ -4,7 +4,7 @@ Camera and YOLO Detection Test Suite
 =====================================
 
 Comprehensive tests for camera capture and YOLO object detection.
-Tests camera connection, image quality, and bottle detection.
+Tests camera connection, image quality, and bowling-pin detection.
 
 Tests:
     - Camera connection
