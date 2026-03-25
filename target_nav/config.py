@@ -42,12 +42,11 @@ DEFAULT_BAUDRATE = 115200               # serial baud rate (Arduino + LiDAR)
 ARDUINO_READY_TIMEOUT = 5.0             # seconds to wait for firmware READY
 ARDUINO_MAX_RECONNECT_BACKOFF = 30.0    # max seconds between reconnect attempts
 
-# Motor speed calibration — measured max speed at PWM 255 (full power).
-# These convert m/s and rad/s commands to PWM values.
-# Measure by running the robot at full PWM and timing distance/rotation.
-# If robot is slower than these values, it will undershoot commanded speed.
-DEFAULT_MAX_LINEAR_SPEED = 0.436        # m/s at PWM 255 (measured)
-DEFAULT_MAX_ANGULAR_SPEED = 2.18        # rad/s at PWM 255 (measured)
+# Maximum robot speeds — used by navigator for speed capping only.
+# The firmware accepts VEL commands in mm/s and mrad/s directly and
+# handles the conversion to motor PWM internally using encoder feedback.
+DEFAULT_MAX_LINEAR_SPEED = 0.436        # m/s (measured at full power)
+DEFAULT_MAX_ANGULAR_SPEED = 2.18        # rad/s (measured at full power)
 
 # Shared memory paths (C++ DRP-AI binary ↔ Python, and Python ↔ Python)
 SHM_CAMERA_PATH = '/dev/shm/v2n_camera'         # annotated BGR frames

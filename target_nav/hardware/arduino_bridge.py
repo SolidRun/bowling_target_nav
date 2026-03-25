@@ -72,6 +72,8 @@ class ArduinoBridge:
 
     The firmware has a 200ms watchdog in VEL mode -- ``send_velocity()``
     must be called at least every 200ms or motors will auto-stop.
+    VEL commands use mm/s and mrad/s units; the firmware converts to
+    motor PWM internally using encoder feedback.
 
     Auto-detection scans ``/dev/ttyACM*`` and ``/dev/ttyUSB*`` for known
     Arduino vendor IDs (0x2341 Arduino, 0x1A86 CH340, 0x10C4 CP210x,
@@ -278,27 +280,24 @@ class ArduinoBridge:
 
         return False
 
-    def send_velocity(self, vx: int, vy: int, wz: int) -> bool:
+    def send_velocity(self, vx_mm: int, vy_mm: int, wz_mrad: int) -> bool:
         """Send VEL command for continuous mecanum velocity.
 
         Must be resent within 200ms (firmware watchdog).
+        The firmware converts mm/s to motor PWM internally using
+        encoder feedback.
 
         Args:
-            vx: forward/backward PWM (-255..255)
-            vy: left/right strafe PWM (-255..255)
-            wz: rotation PWM (-255..255)
+            vx_mm: forward/backward velocity in mm/s
+            vy_mm: left/right strafe velocity in mm/s
+            wz_mrad: rotation velocity in mrad/s
         """
-        vx = max(-255, min(255, vx))
-        vy = max(-255, min(255, vy))
-        wz = max(-255, min(255, wz))
-
-        # Deadzone: stop only if ALL values are near-zero.
-        # Threshold 3 PWM allows creep commands for arrival approach.
-        # Firmware has its own per-motor deadzone from CALIB (typically 30-50 PWM).
-        if abs(vx) < 3 and abs(vy) < 3 and abs(wz) < 3:
+        # Deadzone: stop if all velocities are near-zero.
+        # 3 mm/s threshold allows creep commands for arrival approach.
+        if abs(vx_mm) < 3 and abs(vy_mm) < 3 and abs(wz_mrad) < 3:
             return self.send_stop()
 
-        return self.send_command("VEL", vx, vy, wz)
+        return self.send_command("VEL", vx_mm, vy_mm, wz_mrad)
 
     def send_move(self, direction: str, speed: int, ticks: int) -> bool:
         """Send a timed movement command (encoder-counted).

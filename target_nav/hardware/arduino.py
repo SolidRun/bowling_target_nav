@@ -8,7 +8,7 @@ non-blocking bridge with background threads used by the ROS2 driver.
 
 Firmware Protocol (plain text, newline-terminated, NO checksums):
     TX Commands:
-        VEL,vx,vy,wz           Continuous velocity (-255..255 PWM each)
+        VEL,vx,vy,wz           Continuous velocity (mm/s, mm/s, mrad/s)
         FWD|BWD|LEFT|RIGHT,speed,ticks   Timed move (encoder-counted)
         DIAGFL|DIAGFR|DIAGBL|DIAGBR,speed,ticks   Diagonal timed moves
         TURN,speed,ticks        Rotate in place (positive ticks = CCW)
@@ -156,11 +156,11 @@ class ArduinoBase(ABC):
         return response is not None and "DONE" in response
 
     def set_velocity(self, linear_x: float, linear_y: float, angular_z: float) -> bool:
-        """Send VEL command using proper mecanum inverse kinematics.
+        """Send VEL command with velocity in mm/s and mrad/s.
 
-        Converts m/s and rad/s to PWM-scale values (-255..255) that the
-        firmware's VEL command expects. The firmware handles per-motor
-        PID control internally.
+        Converts m/s and rad/s to mm/s and mrad/s for the firmware.
+        The firmware handles PWM conversion internally using encoder
+        feedback.
 
         Args:
             linear_x: Forward velocity in m/s (positive = forward)
@@ -170,27 +170,17 @@ class ArduinoBase(ABC):
         Returns:
             True if command sent
         """
-        # Convert m/s → PWM using the max speed constants from config.
-        # These must match the real measured max speed at PWM 255.
-        from target_nav.config import DEFAULT_MAX_LINEAR_SPEED, DEFAULT_MAX_ANGULAR_SPEED
-        max_linear = DEFAULT_MAX_LINEAR_SPEED    # 0.436 m/s at PWM 255
-        max_angular = DEFAULT_MAX_ANGULAR_SPEED  # 2.18 rad/s at PWM 255
+        # Convert m/s → mm/s, rad/s → mrad/s
+        vx_mm = int(linear_x * 1000)
+        vy_mm = int(linear_y * 1000)
+        wz_mrad = int(angular_z * 1000)
 
-        vx_pwm = int(linear_x / max_linear * SPEED_MAX)
-        vy_pwm = int(linear_y / max_linear * SPEED_MAX)
-        wz_pwm = int(angular_z / max_angular * SPEED_MAX)
-
-        # Clamp
-        vx_pwm = max(-SPEED_MAX, min(SPEED_MAX, vx_pwm))
-        vy_pwm = max(-SPEED_MAX, min(SPEED_MAX, vy_pwm))
-        wz_pwm = max(-SPEED_MAX, min(SPEED_MAX, wz_pwm))
-
-        # Deadzone: only stop if ALL values are near zero (< 3 PWM).
-        # Low values (3-10) are valid for creep during arrival approach.
-        if abs(vx_pwm) < 3 and abs(vy_pwm) < 3 and abs(wz_pwm) < 3:
+        # Deadzone: only stop if ALL values are near zero (< 3 mm/s).
+        # Low values are valid for creep during arrival approach.
+        if abs(vx_mm) < 3 and abs(vy_mm) < 3 and abs(wz_mrad) < 3:
             return self.stop()
 
-        response = self.send_command(f"VEL,{vx_pwm},{vy_pwm},{wz_pwm}")
+        response = self.send_command(f"VEL,{vx_mm},{vy_mm},{wz_mrad}")
         return response is not None
 
     def move(self, direction: str, speed: int, ticks: int) -> bool:
@@ -264,17 +254,6 @@ class ArduinoBase(ABC):
         response = self.send_command("CALIB")
         return response is not None
 
-    @property
-    def max_linear_speed(self) -> float:
-        """Maximum achievable linear speed in m/s (from config)."""
-        from target_nav.config import DEFAULT_MAX_LINEAR_SPEED
-        return DEFAULT_MAX_LINEAR_SPEED
-
-    @property
-    def max_angular_speed(self) -> float:
-        """Maximum achievable angular speed in rad/s (from config)."""
-        from target_nav.config import DEFAULT_MAX_ANGULAR_SPEED
-        return DEFAULT_MAX_ANGULAR_SPEED
 
 
 class ArduinoBridge(ArduinoBase):
@@ -481,15 +460,15 @@ class MockArduino(ArduinoBase):
 
         elif cmd == "VEL" and len(parts) >= 4:
             try:
-                vx = int(parts[1])
-                vy = int(parts[2])
-                wz = int(parts[3])
+                vx_mm = int(parts[1])   # mm/s
+                vy_mm = int(parts[2])   # mm/s
+                wz_mrad = int(parts[3]) # mrad/s
                 # Simplified mecanum IK (matches firmware)
-                self._motor_pwm[0] = vx - vy - wz  # FL
-                self._motor_pwm[1] = vx + vy - wz  # RL
-                self._motor_pwm[2] = vx - vy + wz  # RR
-                self._motor_pwm[3] = vx + vy + wz  # FR
-                # Simulate encoder increment
+                self._motor_pwm[0] = vx_mm - vy_mm - wz_mrad  # FL
+                self._motor_pwm[1] = vx_mm + vy_mm - wz_mrad  # RL
+                self._motor_pwm[2] = vx_mm - vy_mm + wz_mrad  # RR
+                self._motor_pwm[3] = vx_mm + vy_mm + wz_mrad  # FR
+                # Simulate encoder increment proportional to velocity
                 for i in range(4):
                     self._encoders[i] += self._motor_pwm[i] // 25
                 self._vel_mode = True

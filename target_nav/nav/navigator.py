@@ -299,7 +299,10 @@ class Navigator(ObstacleAvoidanceMixin, BlindApproachMixin, SearchMixin, Arrival
 
         # cmd_vel watchdog: if _publish_cmd() isn't called for 0.5s, stop motors.
         # Prevents runaway if the control loop crashes or hangs.
+        # _watchdog_fired prevents continuous zero-Twist publishing that would
+        # interfere with firmware position commands via /arduino/cmd.
         self._last_cmd_time = time.time()
+        self._watchdog_fired = False
 
         # Throttle param refresh to avoid lock contention every tick
         self._last_param_refresh = 0.0
@@ -398,6 +401,7 @@ class Navigator(ObstacleAvoidanceMixin, BlindApproachMixin, SearchMixin, Arrival
         self._cmd_vel_pub.publish(cmd)
         self._state.nav.set_current_cmd_vel(cmd.linear.x, cmd.linear.y, cmd.angular.z)
         self._last_cmd_time = time.time()
+        self._watchdog_fired = False  # Reset so watchdog can fire again if needed
 
     def check_watchdog(self):
         """Stop motors if no command was published for 0.5s (safety watchdog).
@@ -406,13 +410,23 @@ class Navigator(ObstacleAvoidanceMixin, BlindApproachMixin, SearchMixin, Arrival
         crashed or hung, this ensures motors don't keep running with
         the last velocity forever.
 
+        Publishes zero Twist ONCE on timeout, then sets _watchdog_fired to
+        prevent continuous publishing. This avoids interfering with firmware
+        position commands (FWD, TMOTOR, CALIB) sent via /arduino/cmd — those
+        set _vel_mode=False in arduino_node, but a continuous zero Twist
+        from this watchdog would flip _vel_mode back to True.
+
+        Reset when a new velocity command is published via _publish_cmd().
+
         Returns:
             True if watchdog triggered (motors stopped), False if OK.
         """
         if time.time() - self._last_cmd_time > 0.5:
-            cmd = Twist()
-            self._cmd_vel_pub.publish(cmd)
-            self._state.nav.set_current_cmd_vel(0.0, 0.0, 0.0)
+            if not self._watchdog_fired:
+                cmd = Twist()
+                self._cmd_vel_pub.publish(cmd)
+                self._state.nav.set_current_cmd_vel(0.0, 0.0, 0.0)
+                self._watchdog_fired = True
             return True
         return False
 

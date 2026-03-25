@@ -11,10 +11,11 @@ Supported command types (cmd_dict['type'] -> payload keys):
     stop_robot       -- Emergency stop: publishes zero Twist + sets STOP flag.
     set_nav_param    -- Update one nav param. Keys: 'attr', 'value'.
     reset_nav_params -- Reset all nav params to DEFAULT_NAV_PARAMS.
-    arduino_cmd      -- Send raw string to Arduino. Key: 'command' (str).
+    arduino_cmd      -- Send raw string to Arduino. Key: 'data' (str).
+                        Used by Drive tab (FWD,100,1719), Motors tab (TMOTOR,FL,100),
+                        and System tab (CALIB, STOP).
     reset_odom       -- Publish Empty on /reset_odom topic.
     test_motor       -- Test one motor at PWM. Keys: 'motor' (str), 'pwm' (int).
-    test_motor_twist -- Publish Twist directly. Keys: 'vx', 'vy', 'wz' (float).
 
 Runs in: Nav process (Core 1), called from NavNode._poll_commands().
 
@@ -91,18 +92,6 @@ def dispatch_command(cmd_dict, state, node):
             msg = String()
             msg.data = f'TMOTOR,{motor},{pwm}'  # firmware expects TMOTOR, not MOTOR
             node.arduino_cmd_pub.publish(msg)
-
-    elif cmd_type == 'test_motor_twist':
-        vx = cmd_dict.get('vx', 0.0)
-        vy = cmd_dict.get('vy', 0.0)
-        wz = cmd_dict.get('wz', 0.0)
-        if node is not None:
-            from geometry_msgs.msg import Twist
-            cmd = Twist()
-            cmd.linear.x = float(vx)
-            cmd.linear.y = float(vy)
-            cmd.angular.z = float(wz)
-            node.cmd_vel_pub.publish(cmd)
 
     elif cmd_type == 'settings_changed':
         # GUI saved new settings — reload from disk into nav process state

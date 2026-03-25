@@ -56,7 +56,7 @@ class ArduinoTestBridge:
 
     # Motor commands (matching rzv2n-arduino-motor-controller firmware)
     # Movement: CMD,speed,ticks (speed>0, ticks>0 required)
-    # Velocity:  VEL,vx,vy,wz (-255..255, needs resend < 200ms)
+    # Velocity:  VEL,vx,vy,wz (mm/s, mm/s, mrad/s, needs resend < 200ms)
     CMD_FWD = "FWD"
     CMD_BWD = "BWD"
     CMD_LEFT = "LEFT"
@@ -162,7 +162,7 @@ class ArduinoTestBridge:
 
         Protocol (matches rzv2n-arduino-motor-controller):
           Movement: CMD,speed,ticks (speed>0, ticks>0 required!)
-          Velocity: VEL,vx,vy,wz   (-255..255)
+          Velocity: VEL,vx,vy,wz   (mm/s, mm/s, mrad/s)
           Simple:   STOP / READ / SYNC
 
         Returns:
@@ -216,13 +216,13 @@ class ArduinoTestBridge:
 
         Args:
             duration: How long to run each test (seconds)
-            speed: Motor speed (20-255)
+            speed: Motor speed in mm/s
 
         Returns:
             TestResult with all motor test results
         """
         result = TestResult("Motor Test")
-        speed = max(20, min(255, speed))
+        speed = max(20, min(500, speed))
 
         # Using VEL,vx,vy,wz for continuous control
         commands = [

@@ -284,7 +284,6 @@ def main_multiprocess():
             'settings_changed': CMD_SET_PARAM,
             'drpai_restart': CMD_SET_PARAM,
             'test_motor': CMD_TEST_MOTOR,
-            'test_motor_twist': CMD_TEST_MOTOR,
             'arduino_cmd': CMD_SET_PARAM,
             'reset_odom': CMD_SET_PARAM,
             'reset_nav_params': CMD_SET_PARAM,

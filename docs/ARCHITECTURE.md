@@ -133,23 +133,68 @@ No locks, no mutexes, no CAS. The SPSC invariant guarantees correctness.
    -> TargetTracker: size-distance gate, LiDAR matching, Kalman filter
    -> NavController state machine: NAVIGATING / SEARCHING / BLIND_APPROACH
    -> Navigator: VFH obstacle avoidance, holonomic velocity commands
-   -> Publishes /cmd_vel (Twist)
+   -> Publishes /cmd_vel (Twist) with linear.x/y (m/s) and angular.z (rad/s)
    -> Writes nav state to NavShmWriter (/dev/shm/v2n_nav)
    -> Writes LiDAR points to LaserShmWriter (/dev/shm/v2n_laser)
 
-4. Arduino node (launched by bringup) converts Twist to PWM
-   -> Sends "VEL,vx,vy,wz\n" to Arduino firmware
-   -> Firmware runs mecanum IK -> 4 motors spin
-   -> Encoders feed back "ODOM,vx,vy,wz" -> odometry_node
-   -> TF: odom -> base_link updated
+4. ArduinoDriverNode (arduino_node.py, launched by bringup)
+   Two command paths share one serial port, controlled by _vel_mode flag:
+     VEL mode (_vel_mode=True): nav publishes /cmd_vel -> command_loop sends VEL
+     Position mode (_vel_mode=False): GUI sends /arduino/cmd -> direct passthrough
+   a. _cmd_vel_callback stores latest Twist + timestamp, sets _vel_mode=True
+   b. 20Hz timer (_command_loop) runs every 50ms (only when _vel_mode=True):
+      -> Checks timeout: if no cmd_vel for 0.5s -> sends STOP once, _vel_mode=False
+      -> Converts units: m/s * 1000 = mm/s, rad/s * 1000 = mrad/s
+      -> Calls bridge.send_velocity(vx_mm, vy_mm, wz_mrad)
+   c. _arduino_cmd_callback sets _vel_mode=False, forwards raw command to firmware
+      (FWD,100,1719 / TMOTOR,FL,100 / CALIB / STOP)
+   d. ArduinoBridge writes command to USB serial (/dev/ttyACM0)
 
-5. GUI (Core 0) SHM poll thread reads at 20 Hz:
+5. Arduino firmware (on Arduino Mega via USB /dev/ttyACM0)
+   a. serial_cmd.cpp parses "VEL,200,0,300" -> Command{VELOCITY, vx=200, vy=0, wz=300}
+   b. robot.cpp handleCommand(VELOCITY):
+      -> Mecanum::computeFromVelocity(200, 0, 300, tickRates[])
+         mm/s -> per-wheel tick rates via mecanum inverse kinematics
+      -> Motion::setMotorTickRates(tickRates) sets PID velocity setpoints
+      -> Enables 200ms watchdog (no new VEL within 200ms -> auto-STOP)
+   c. Timer1 ISR fires at 50Hz -> Motion::update():
+      -> Per-motor PID loop: read encoder, compute error, adjust PWM
+      -> PWM = feed-forward + Kp*error + Ki*integral (per motor)
+      -> Motor::setAll(pwm) writes all 4 motors atomically
+   d. motor.cpp converts PWM 0-255 -> 12-bit duty cycle (0-4095)
+   e. PCA9685 (I2C at 0x60) generates 1600Hz PWM on 8 channels
+   f. TB67H450 H-bridges switch battery power to motors
+   g. DC motors spin through 90:1 gearbox -> mecanum wheels turn
+
+6. Odometry feedback (20Hz, every 50ms, VEL mode only)
+   a. Firmware reads 4 encoder snapshots (atomic, interrupts disabled)
+   b. Computes tick deltas -> Mecanum::forwardKinematics() -> vx,vy,wz
+   c. Sends "ODOM,vx_mm,vy_mm,wz_mrad\n" over serial
+   d. ArduinoBridge background read thread receives line
+   e. ArduinoDriverNode publishes JSON on /arduino/odom_raw
+   f. OdometryNode converts mm/s -> m/s, integrates pose -> publishes /odom
+   g. TF: odom -> base_link updated
+   h. Nav process reads /odom -> computes new error -> new Twist -> loop
+   Note: ENC telemetry (raw ticks, sent during IDLE/test modes) is ignored
+   by the ROS2 side. Only ODOM is used for navigation odometry.
+
+7. GUI (Core 0) SHM poll thread reads at 20 Hz:
    -> NavShmReader -> SharedState.nav (status bar, map overlay)
    -> LaserShmReader -> SharedState.sensors (radar view)
    -> DetShmReader -> SharedState.detection (camera panel info bar)
    -> /dev/shm/v2n_camera -> camera panel (raw BGR via mmap)
    -> GUI commands -> CmdRingBuffer.push() -> Nav polls at 20 Hz
 ```
+
+### Safety Layers (any one stops the robot independently)
+
+| Layer | Where | Timeout | Trigger |
+|-------|-------|---------|---------|
+| Nav node | Python (Core 1) | — | Stops publishing /cmd_vel when arrived |
+| ArduinoDriverNode | Python (arduino_node.py) | 0.5s | No cmd_vel received -> sends STOP |
+| Firmware watchdog | Arduino (robot.cpp) | 200ms | No VEL command received -> auto-STOP |
+| Firmware stall detect | Arduino (motion.cpp) | 5s | Encoder not progressing -> STOP + ERROR |
+| Firmware move timeout | Arduino (robot.cpp) | 30s | Position move taking too long -> STOP |
 
 ### Timing Summary
 

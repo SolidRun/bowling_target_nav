@@ -272,9 +272,9 @@ Sub-tabs: **Drive**, **Motors**, **System**.
 
 | Sub-tab | Content |
 |---------|---------|
-| Drive | 12-button direction grid (FWD, BWD, LEFT, RIGHT, FL, FR, BL, BR diagonals, TL/TR rotation, STOP). Speed slider (0.05–0.40 m/s), duration slider (0.5–5.0s). Buttons send timed Twist commands with 150ms repeat for firmware watchdog. |
-| Motors | Single motor test: PWM slider (0–200), Forward/Reverse radio, duration spinner (0.5–5.0s), per-motor buttons (FL, FR, BL, BR). Sends `TMOTOR,id,pwm` to Arduino. Encoder section: READ ENCODERS, ENCODER TEST (`TENC`), STOP. Motor calibration: START CALIBRATION (`CALIB`, ~40s), ABORT. Reset Odometry button. |
-| System | Reset All Defaults button (resets all navigation, map, and detection parameters to factory defaults). |
+| Drive | 12-button direction grid (FWD, BWD, LEFT, RIGHT, FL, FR, BL, BR diagonals, TL/TR rotation, STOP). PWM speed slider (20–255), ticks slider (100–17190, ~17.19 ticks/mm) with live distance label. Buttons send firmware position commands directly (e.g. `FWD,100,1719`). Firmware handles PID, acceleration, deceleration, and auto-stop on completion (`DONE`). |
+| Motors | Single motor test: PWM slider (0–200), Forward/Reverse radio, duration spinner (0.5–5.0s), per-motor buttons (FL, FR, RL, RR). Sends `TMOTOR,id,pwm` to Arduino. Auto-stops after duration. |
+| System | Reset Odometry button. Motor calibration with 60s countdown timer: START CALIBRATION (`CALIB`), ABORT (`STOP`). |
 
 ### Auto-Save Behavior
 

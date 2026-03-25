@@ -2,19 +2,14 @@
 
 Provides three sub-tabs for robot hardware testing and calibration:
 
-    Drive:   8-direction pad + rotation, sends Twist via test_motor_twist
-             (arduino_node converts m/s to PWM). Click-to-move with auto-stop.
+    Drive:   8-direction pad + rotation, sends firmware position commands
+             directly (FWD,speed,ticks / TURN,speed,ticks / DIAGFL,speed,ticks).
+             User controls PWM speed (20-255) and ticks. No unit conversions.
     Motors:  Test individual motors with raw TMOTOR,id,pwm commands.
-    System:  Reset odometry, run calibration, read encoders.
+    System:  Reset odometry, motor calibration (~40s).
 
-Command path (Drive tab):
-    GUI click -> send_ros_command({'type': 'test_motor_twist', ...})
-    -> CmdRingBuffer -> nav_node _poll_commands -> dispatch_command
-    -> publishes Twist to /cmd_vel
-    -> arduino_node converts m/s to PWM using max_linear_speed / max_angular_speed
-
-Command path (Motors / System tabs):
-    GUI click -> send_ros_command({'type': 'arduino_cmd', 'data': 'TMOTOR,FL,100'})
+Command path (Drive / Motors / System tabs):
+    GUI click -> send_ros_command({'type': 'arduino_cmd', 'data': 'FWD,100,1719'})
     -> CmdRingBuffer -> nav_node -> dispatch_command
     -> publishes String to /arduino/cmd
     -> arduino_node forwards raw command to firmware
@@ -30,16 +25,16 @@ from target_nav.utils.log import get_logger
 
 logger = get_logger('gui.settings.tools')
 
-# Drive tab defaults
-DEFAULT_SPEED = 0.20        # m/s (safe default)
-MIN_SPEED = 0.05            # m/s
-MAX_SPEED = 0.40            # m/s
-SPEED_STEP = 0.01           # m/s
+# Drive tab defaults (firmware units: PWM 20-255, ticks)
+DEFAULT_DRIVE_SPEED = 100       # PWM (safe default)
+MIN_DRIVE_SPEED = 20            # PWM (below this, motors stall)
+MAX_DRIVE_SPEED = 255           # PWM max
+DRIVE_SPEED_STEP = 5
 
-DEFAULT_DURATION = 1.5      # seconds
-MIN_DURATION = 0.5          # seconds
-MAX_DURATION = 5.0          # seconds
-DURATION_STEP = 0.1         # seconds
+DEFAULT_DRIVE_TICKS = 1719      # ~10cm (17.19 ticks/mm)
+MIN_DRIVE_TICKS = 100           # ~0.6cm
+MAX_DRIVE_TICKS = 17190         # ~100cm
+DRIVE_TICKS_STEP = 100
 
 # Motor test tab defaults
 DEFAULT_MOTOR_PWM = 100     # safe PWM
@@ -49,15 +44,11 @@ MOTOR_PWM_STEP = 10
 
 DEFAULT_MOTOR_DURATION = 2.0  # seconds
 
-# Angular speed multiplier: angular_speed = linear_speed * this factor
-# At 0.20 m/s linear -> 0.60 rad/s angular (gentle turn)
-ANGULAR_SPEED_FACTOR = 3.0
+# Calibration countdown (estimate with safety margin, firmware timeout is 60s)
+CALIB_TIMEOUT_S = 60
 
-# Repeat interval for sending velocity commands (firmware 200ms watchdog)
-VEL_REPEAT_MS = 150
-
-# Motor IDs matching firmware TMOTOR command
-MOTOR_IDS = ['FL', 'FR', 'BL', 'BR']
+# Motor IDs matching firmware TMOTOR command (FL/FR/RL/RR)
+MOTOR_IDS = ['FL', 'FR', 'RL', 'RR']
 
 
 class ToolsTabMixin:
@@ -76,47 +67,51 @@ class ToolsTabMixin:
     # ================================================================
 
     def _build_drive_subtab(self):
-        """8-direction pad + rotation with speed/duration sliders."""
+        """8-direction pad + rotation with PWM speed and ticks sliders."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         box.set_margin_top(6)
         box.set_margin_start(6)
         box.set_margin_end(6)
 
-        # -- Timers --
-        self._drive_repeat_timer = None
-        self._drive_stop_timer = None
-
-        # -- Speed slider --
-        box.pack_start(self._make_section("Speed (m/s)"), False, False, 0)
+        # -- Speed slider (PWM 20-255) --
+        box.pack_start(self._make_section("Speed (PWM 20-255)"), False, False, 0)
         speed_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         speed_row.set_margin_start(10)
         self._drive_speed_adj = Gtk.Adjustment(
-            value=DEFAULT_SPEED, lower=MIN_SPEED, upper=MAX_SPEED,
-            step_increment=SPEED_STEP, page_increment=0.05)
+            value=DEFAULT_DRIVE_SPEED, lower=MIN_DRIVE_SPEED, upper=MAX_DRIVE_SPEED,
+            step_increment=DRIVE_SPEED_STEP, page_increment=25)
         speed_scale = Gtk.Scale(
             orientation=Gtk.Orientation.HORIZONTAL,
             adjustment=self._drive_speed_adj)
-        speed_scale.set_digits(2)
+        speed_scale.set_digits(0)
         speed_scale.set_value_pos(Gtk.PositionType.RIGHT)
         speed_scale.set_hexpand(True)
         speed_row.pack_start(speed_scale, True, True, 0)
         box.pack_start(speed_row, False, False, 0)
 
-        # -- Duration slider --
-        box.pack_start(self._make_section("Duration (seconds)"), False, False, 0)
-        dur_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        dur_row.set_margin_start(10)
-        self._drive_dur_adj = Gtk.Adjustment(
-            value=DEFAULT_DURATION, lower=MIN_DURATION, upper=MAX_DURATION,
-            step_increment=DURATION_STEP, page_increment=0.5)
-        dur_scale = Gtk.Scale(
+        # -- Ticks slider --
+        box.pack_start(self._make_section("Distance (ticks, ~17.19 ticks/mm)"), False, False, 0)
+        ticks_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        ticks_row.set_margin_start(10)
+        self._drive_ticks_adj = Gtk.Adjustment(
+            value=DEFAULT_DRIVE_TICKS, lower=MIN_DRIVE_TICKS, upper=MAX_DRIVE_TICKS,
+            step_increment=DRIVE_TICKS_STEP, page_increment=500)
+        ticks_scale = Gtk.Scale(
             orientation=Gtk.Orientation.HORIZONTAL,
-            adjustment=self._drive_dur_adj)
-        dur_scale.set_digits(1)
-        dur_scale.set_value_pos(Gtk.PositionType.RIGHT)
-        dur_scale.set_hexpand(True)
-        dur_row.pack_start(dur_scale, True, True, 0)
-        box.pack_start(dur_row, False, False, 0)
+            adjustment=self._drive_ticks_adj)
+        ticks_scale.set_digits(0)
+        ticks_scale.set_value_pos(Gtk.PositionType.RIGHT)
+        ticks_scale.set_hexpand(True)
+        ticks_row.pack_start(ticks_scale, True, True, 0)
+        box.pack_start(ticks_row, False, False, 0)
+
+        # -- Approx distance label --
+        self._drive_dist_label = Gtk.Label()
+        self._drive_dist_label.set_xalign(0)
+        self._drive_dist_label.set_margin_start(10)
+        self._update_dist_label()
+        self._drive_ticks_adj.connect('value-changed', lambda _: self._update_dist_label())
+        box.pack_start(self._drive_dist_label, False, False, 0)
 
         # -- Direction grid --
         box.pack_start(self._make_section("Direction (click to move)"), False, False, 2)
@@ -127,10 +122,11 @@ class ToolsTabMixin:
         grid.set_halign(Gtk.Align.CENTER)
 
         # Layout: 4 rows x 3 cols
-        #   Row 0: FL   FWD   FR
-        #   Row 1: LEFT STOP  RIGHT
-        #   Row 2: BL   BWD   BR
-        #   Row 3: TL   ---   TR
+        #   Row 0: DIAGFL  FWD     DIAGFR
+        #   Row 1: LEFT    STOP    RIGHT
+        #   Row 2: DIAGBL  BWD     DIAGBR
+        #   Row 3: TL      ---     TR
+        # Button labels are short for the GUI, firmware commands are mapped below
         buttons = [
             ("FL",    0, 0), ("FWD",   0, 1), ("FR",    0, 2),
             ("LEFT",  1, 0), ("STOP",  1, 1), ("RIGHT", 1, 2),
@@ -157,85 +153,51 @@ class ToolsTabMixin:
 
         return box
 
+    def _update_dist_label(self):
+        """Update the approximate distance label from current ticks value."""
+        ticks = int(self._drive_ticks_adj.get_value())
+        mm = ticks / 17.19
+        self._drive_dist_label.set_markup(
+            f"<span size='small' foreground='#888'>~ {mm:.0f} mm ({mm/10:.1f} cm)</span>")
+
     def _on_drive_direction(self, _btn, direction):
-        """Handle direction button click: send velocity for duration then stop."""
-        self._cancel_drive_timers()
+        """Send firmware position command: CMD,speed,ticks."""
+        speed = int(self._drive_speed_adj.get_value())
+        ticks = int(self._drive_ticks_adj.get_value())
 
-        speed = self._drive_speed_adj.get_value()
-        duration = self._drive_dur_adj.get_value()
-        duration_ms = int(duration * 1000)
-
-        # Map direction label to (vx, vy, wz) in m/s and rad/s
-        # vx: forward(+) / backward(-)
-        # vy: left(+) / right(-)
-        # wz: CCW(+) / CW(-)
-        ang = speed * ANGULAR_SPEED_FACTOR
-        twist_map = {
-            'FWD':   ( speed,  0,      0),
-            'BWD':   (-speed,  0,      0),
-            'LEFT':  ( 0,      speed,  0),
-            'RIGHT': ( 0,     -speed,  0),
-            'FL':    ( speed,  speed,  0),
-            'FR':    ( speed, -speed,  0),
-            'BL':    (-speed,  speed,  0),
-            'BR':    (-speed, -speed,  0),
-            'TL':    ( 0,      0,      ang),
-            'TR':    ( 0,      0,     -ang),
+        # Map GUI button labels to firmware command names
+        cmd_map = {
+            'FWD':   'FWD',
+            'BWD':   'BWD',
+            'LEFT':  'LEFT',
+            'RIGHT': 'RIGHT',
+            'FL':    'DIAGFL',
+            'FR':    'DIAGFR',
+            'BL':    'DIAGBL',
+            'BR':    'DIAGBR',
+            'TL':    'TURN',      # TURN,speed,ticks (positive = CCW)
+            'TR':    'TURN',      # TURN,speed,-ticks (negative = CW)
         }
-        vx, vy, wz = twist_map.get(direction, (0, 0, 0))
 
-        # Send initial command
-        self._send_twist(vx, vy, wz)
+        firmware_cmd = cmd_map.get(direction, 'STOP')
 
-        # Show status
+        # TURN uses sign of ticks for direction: positive=CCW, negative=CW
+        if direction == 'TR':
+            ticks = -ticks
+
+        cmd = f"{firmware_cmd},{speed},{ticks}"
+        logger.info("Drive cmd: %s", cmd)
+        self._state.send_ros_command({'type': 'arduino_cmd', 'data': cmd})
+
+        mm = abs(ticks) / 17.19
         self._drive_status.set_markup(
-            f"<span foreground='#50fa7b'>{direction} at {speed:.2f} m/s "
-            f"for {duration:.1f}s</span>")
-
-        # Repeat every 150ms to keep firmware watchdog alive
-        self._drive_repeat_timer = GLib.timeout_add(
-            VEL_REPEAT_MS, self._drive_repeat_tick, vx, vy, wz)
-
-        # Auto-stop after duration
-        self._drive_stop_timer = GLib.timeout_add(duration_ms, self._drive_auto_stop)
-
-    def _drive_repeat_tick(self, vx, vy, wz):
-        """Resend velocity command to keep firmware watchdog alive."""
-        self._send_twist(vx, vy, wz)
-        return True  # keep repeating
-
-    def _drive_auto_stop(self):
-        """Auto-stop after duration elapsed."""
-        self._cancel_drive_timers()
-        self._state.send_ros_command({'type': 'stop_robot'})
-        self._drive_status.set_markup(
-            "<span foreground='#888'>Done</span>")
-        return False  # do not repeat
+            f"<span foreground='#50fa7b'>{cmd} (~{mm:.0f}mm)</span>")
 
     def _on_drive_stop(self, _btn):
-        """Emergency stop button."""
-        self._cancel_drive_timers()
-        self._state.send_ros_command({'type': 'stop_robot'})
+        """Emergency stop."""
         self._state.send_ros_command({'type': 'arduino_cmd', 'data': 'STOP'})
         self._drive_status.set_markup(
             "<span foreground='#ff6b6b'>STOPPED</span>")
-
-    def _cancel_drive_timers(self):
-        """Cancel any active drive repeat/stop timers."""
-        for attr in ('_drive_repeat_timer', '_drive_stop_timer'):
-            timer_id = getattr(self, attr, None)
-            if timer_id is not None:
-                GLib.source_remove(timer_id)
-                setattr(self, attr, None)
-
-    def _send_twist(self, vx, vy, wz):
-        """Send a test_motor_twist command with m/s values."""
-        self._state.send_ros_command({
-            'type': 'test_motor_twist',
-            'vx': float(vx),
-            'vy': float(vy),
-            'wz': float(wz),
-        })
 
     # ================================================================
     # Motors sub-tab
@@ -375,7 +337,7 @@ class ToolsTabMixin:
     # ================================================================
 
     def _build_system_subtab(self):
-        """System tools: reset odometry, calibration, read encoders."""
+        """System tools: reset odometry, motor calibration."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         box.set_margin_top(6)
         box.set_margin_start(6)
@@ -393,47 +355,11 @@ class ToolsTabMixin:
         odom_row.pack_start(self._sys_odom_status, True, True, 0)
         box.pack_start(odom_row, False, False, 4)
 
-        # -- Encoders --
-        box.pack_start(self._make_section("Encoders"), False, False, 0)
-        enc_info = Gtk.Label()
-        enc_info.set_markup(
-            "<span size='small' foreground='#888'>"
-            "READ: snapshot of all 4 encoder counters.\n"
-            "TENC: stream mode -- spin wheels to see encoder values.</span>")
-        enc_info.set_xalign(0)
-        enc_info.set_margin_start(10)
-        enc_info.set_line_wrap(True)
-        box.pack_start(enc_info, False, False, 2)
-
-        enc_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        enc_row.set_margin_start(10)
-        read_btn = Gtk.Button(label="READ ENCODERS")
-        read_btn.set_size_request(140, 40)
-        read_btn.connect('clicked', self._on_sys_arduino_cmd, 'READ')
-        enc_row.pack_start(read_btn, False, False, 0)
-
-        tenc_btn = Gtk.Button(label="ENCODER TEST")
-        tenc_btn.set_size_request(140, 40)
-        tenc_btn.connect('clicked', self._on_sys_arduino_cmd, 'TENC')
-        enc_row.pack_start(tenc_btn, False, False, 0)
-
-        enc_stop = Gtk.Button(label="STOP")
-        enc_stop.set_size_request(80, 40)
-        enc_stop.get_style_context().add_class('destructive-action')
-        enc_stop.connect('clicked', self._on_sys_arduino_cmd, 'STOP')
-        enc_row.pack_start(enc_stop, False, False, 0)
-        box.pack_start(enc_row, False, False, 4)
-
-        self._sys_enc_status = Gtk.Label(label="")
-        self._sys_enc_status.set_xalign(0)
-        self._sys_enc_status.set_margin_start(10)
-        box.pack_start(self._sys_enc_status, False, False, 2)
-
         # -- Calibration --
         box.pack_start(self._make_section("Motor Calibration"), False, False, 0)
         cal_info = Gtk.Label()
         cal_info.set_markup(
-            "<span size='small' foreground='#888'>"
+            "<span foreground='#888'>"
             "Runs ~40s calibration routine:\n"
             "  1. Dead-zone detection (per motor minimum PWM)\n"
             "  2. Forward speed calibration\n"
@@ -474,23 +400,45 @@ class ToolsTabMixin:
             "<span foreground='#50fa7b'>Odometry reset to (0, 0, 0)</span>")
 
     def _on_sys_arduino_cmd(self, _btn, cmd):
-        """Send raw Arduino command and update appropriate status label."""
+        """Send raw Arduino command and update calibration status label."""
         logger.info("Arduino cmd: %s", cmd)
         self._state.send_ros_command({'type': 'arduino_cmd', 'data': cmd})
 
         if cmd == 'CALIB':
-            self._sys_cal_status.set_markup(
-                "<span foreground='#ffaa00'>Calibrating ~40s... LIFT ROBOT!</span>")
+            self._cancel_calib_timer()
+            self._calib_remaining = CALIB_TIMEOUT_S
+            self._calib_timer = GLib.timeout_add(1000, self._calib_tick)
+            self._update_calib_label()
         elif cmd == 'STOP':
             self._cancel_motor_test_timer()
-            for attr in ('_sys_cal_status', '_sys_enc_status'):
-                lbl = getattr(self, attr, None)
-                if lbl:
-                    lbl.set_markup(
-                        "<span foreground='#ff6b6b'>STOP sent</span>")
-        elif cmd == 'READ':
-            self._sys_enc_status.set_markup(
-                "<span foreground='#888'>Reading encoders...</span>")
-        elif cmd == 'TENC':
-            self._sys_enc_status.set_markup(
-                "<span foreground='#888'>Encoder test mode (spin wheels)</span>")
+            self._cancel_calib_timer()
+            self._sys_cal_status.set_markup(
+                "<span foreground='#ff6b6b'>Aborted</span>")
+
+    def _update_calib_label(self):
+        """Update the calibration countdown label."""
+        remaining = self._calib_remaining
+        self._sys_cal_status.set_markup(
+            f"<span foreground='#ffaa00'>Calibrating... "
+            f"{remaining}s remaining</span>")
+
+    def _calib_tick(self):
+        """Countdown timer for calibration (1Hz)."""
+        self._calib_remaining -= 1
+
+        if self._calib_remaining <= 0:
+            self._sys_cal_status.set_markup(
+                "<span foreground='#50fa7b'>Calibration should be complete. "
+                "Results saved to Arduino EEPROM.</span>")
+            self._calib_timer = None
+            return False
+
+        self._update_calib_label()
+        return True
+
+    def _cancel_calib_timer(self):
+        """Cancel calibration countdown timer."""
+        timer = getattr(self, '_calib_timer', None)
+        if timer is not None:
+            GLib.source_remove(timer)
+            self._calib_timer = None

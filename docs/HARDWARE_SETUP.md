@@ -158,15 +158,15 @@ COMMAND[,arg1,arg2,...]\n
 VEL,vx,vy,wz
 ```
 
-| Parameter | Range | Description |
-|-----------|-------|-------------|
-| vx | -255 to 255 | Forward/backward PWM |
-| vy | -255 to 255 | Left/right strafe PWM |
-| wz | -255 to 255 | Rotation PWM (+ = CCW) |
+| Parameter | Unit | Description |
+|-----------|------|-------------|
+| vx | mm/s | Forward/backward velocity |
+| vy | mm/s | Left/right strafe velocity |
+| wz | mrad/s | Rotation velocity (+ = CCW) |
 
 **200ms Watchdog**: Motors automatically stop if no `VEL` command is received within 200ms. The ROS node must resend at >=5 Hz.
 
-**Dead Zone**: Commands with `|vx|, |vy|, |wz| < 3` trigger automatic STOP.
+**Dead Zone**: Commands with `|vx|, |vy|, |wz| < 3` trigger automatic STOP. The firmware converts mm/s to motor PWM internally using encoder feedback.
 
 ### Simple Commands
 
@@ -178,18 +178,43 @@ VEL,vx,vy,wz
 | `CALIB` | Start motor calibration (~40 seconds) |
 | `RESET` | Reset encoder counters to zero |
 
-### GUI Motor Calibration (via Settings → Tools tab)
+### GUI Hardware Tools (via Settings → Tools tab)
 
-The Settings window provides buttons to send calibration commands via the `/arduino/cmd` ROS2 topic (`std_msgs/String`):
+The Settings window provides three sub-tabs for hardware testing. All commands are sent via the `/arduino/cmd` ROS2 topic (`std_msgs/String`) directly to the firmware.
 
-| Button | Command Sent | Purpose |
-|--------|-------------|---------|
-| CALIBRATE | `CALIB` | Full motor calibration (~15s) |
-| SYNC | `SYNC` | Synchronize communication |
-| READ | `READ` | Read current encoder values |
-| RESET ENC | `RESET` | Reset encoder counters |
+**Drive sub-tab** — 8-direction pad + rotation with PWM speed and ticks sliders:
 
-This is the recommended way to calibrate motors — no terminal access needed.
+| Button | Firmware Command | Description |
+|--------|-----------------|-------------|
+| FWD | `FWD,speed,ticks` | Drive forward |
+| BWD | `BWD,speed,ticks` | Drive backward |
+| LEFT | `LEFT,speed,ticks` | Strafe left |
+| RIGHT | `RIGHT,speed,ticks` | Strafe right |
+| FL/FR/BL/BR | `DIAGFL,speed,ticks` etc. | Diagonal movement |
+| TL | `TURN,speed,ticks` | Rotate CCW |
+| TR | `TURN,speed,-ticks` | Rotate CW |
+| STOP | `STOP` | Emergency stop |
+
+**Motors sub-tab** — single motor test with raw PWM:
+
+| Button | Firmware Command | Description |
+|--------|-----------------|-------------|
+| FL/FR/RL/RR | `TMOTOR,id,pwm` | Test one motor at raw PWM |
+| STOP | `STOP` | Stop motor |
+
+**System sub-tab** — odometry reset and motor calibration:
+
+| Button | Command | Purpose |
+|--------|---------|---------|
+| RESET ODOMETRY | (ROS2 /reset_odom) | Reset pose to (0, 0, 0) |
+| START CALIBRATION | `CALIB` | Full motor calibration (~40s, 60s countdown timer) |
+| ABORT | `STOP` | Abort calibration in progress |
+
+Calibration shows a 60s countdown timer in the GUI. The firmware typically finishes in ~40s (dead-zone + forward + reverse). The 60s is a safe estimate.
+
+This is the recommended way to test and calibrate motors — no terminal access needed.
+
+**Mode switching (VEL vs position):** The ArduinoDriverNode uses a `_vel_mode` flag to prevent the 20Hz VEL command_loop from interfering with GUI position commands. When `/arduino/cmd` receives a command (FWD, TMOTOR, CALIB), `_vel_mode` is set to False and the command_loop goes idle. When `/cmd_vel` receives a velocity (navigation active), `_vel_mode` is set to True and the command_loop resumes sending VEL commands.
 
 ### Firmware Responses
 
@@ -201,14 +226,16 @@ This is the recommended way to calibrate motors — no terminal access needed.
 | `BUSY` | Motors busy with previous command |
 | `ERROR: msg` | Error with description |
 
-### Telemetry (20Hz in VEL mode)
+### Telemetry
 
 ```
-ODOM,vx_mm,vy_mm,wz_mrad      # Odometry velocities
-ENC,FL:ticks,RL:ticks,RR:ticks,FR:ticks,t_us:microseconds
+ODOM,vx_mm,vy_mm,wz_mrad      # Odometry velocities (20Hz, VEL mode only)
+ENC,FL:ticks,RL:ticks,RR:ticks,FR:ticks,t_us:microseconds  # Raw encoder ticks (1Hz idle, 20Hz position/test modes)
 CALIB,progress                  # During calibration
 STALL,motor_info                # Stall detection
 ```
+
+**Note:** Only ODOM telemetry is consumed by the OdometryNode for navigation. ENC telemetry (sent during IDLE and position/test modes) is ignored by the ROS2 side — the firmware already computes forward kinematics in VEL mode.
 
 ### Critical Requirements
 
@@ -230,7 +257,7 @@ Python                          Arduino
   │                    (wait 5s)   │
   │ ◄────────── "READY\n" ────────│
   │                                │
-  │ ─── "VEL,100,0,0\n" ────────►│
+  │ ─── "VEL,200,0,0\n" ────────►│  (200 mm/s forward)
   │ ◄────────── "OK\n" ──────────│
   │ ◄────── "ODOM,..." (20Hz) ───│
   │                                │
@@ -241,17 +268,193 @@ Python                          Arduino
 ### Velocity Conversion (Python Side)
 
 ```python
-# From m/s and rad/s to PWM values:
-max_wheel_radps = 11.2
-max_linear = max_wheel_radps * WHEEL_RADIUS  # ~0.448 m/s
-max_angular = max_linear / ((WHEELBASE + TRACK_WIDTH) / 2)  # ~2.24 rad/s
+# From m/s and rad/s to mm/s and mrad/s:
+vx_mm = int(linear_x * 1000)     # m/s -> mm/s
+vy_mm = int(linear_y * 1000)     # m/s -> mm/s
+wz_mrad = int(angular_z * 1000)  # rad/s -> mrad/s
 
-vx_pwm = int(linear_x / max_linear * 255)   # Clamp to [-255, 255]
-vy_pwm = int(linear_y / max_linear * 255)
-wz_pwm = int(angular_z / max_angular * 255)
-
-# Send: VEL,vx_pwm,vy_pwm,wz_pwm
+# Send: VEL,vx_mm,vy_mm,wz_mrad
+# Firmware handles mm/s -> PWM conversion internally using encoder feedback.
 ```
+
+### End-to-End Motor Control Flow (VEL Mode)
+
+This is the complete path from "navigate to target" to "wheels spinning", showing every layer and conversion. This loop repeats ~10 times per second until the robot arrives.
+
+```
+Step 1: NAVIGATION DECIDES VELOCITY
+────────────────────────────────────
+  Nav node (Core 1, 20Hz control loop):
+    - Camera/DRP-AI detected a bowling pin 5m ahead at 10° left
+    - Reads current robot pose from /odom
+    - Computes error: distance=5.0m, angle=10°
+    - VFH obstacle avoidance checks LiDAR for obstacles
+    - Speed ramp: far from target -> full speed 0.20 m/s
+    - Publishes Twist on /cmd_vel:
+        linear.x  = 0.20 m/s   (forward)
+        linear.y  = 0.00 m/s   (no strafe)
+        angular.z = 0.30 rad/s (turn left to align)
+
+Step 2: ROS2 NODE CONVERTS AND SENDS
+─────────────────────────────────────
+  ArduinoDriverNode (arduino_node.py):
+    a. _cmd_vel_callback() stores Twist + timestamps it
+       (does NOT send to Arduino here — decouples nav rate from send rate)
+    b. 20Hz timer (_command_loop) fires every 50ms:
+       - Checks: is last cmd_vel fresh? (< 0.5s old) -> YES
+       - Converts ROS2 SI units to firmware integer units:
+           0.20 m/s  × 1000 = 200 mm/s
+           0.00 m/s  × 1000 =   0 mm/s
+           0.30 rad/s × 1000 = 300 mrad/s
+       - Calls bridge.send_velocity(200, 0, 300)
+    c. ArduinoBridge (arduino_bridge.py):
+       - Deadzone check: all values >= 3 -> not zero, proceed
+       - Builds ASCII: "VEL,200,0,300\n"
+       - Writes to /dev/ttyACM0 (USB serial, 115200 baud)
+
+Step 3: FIRMWARE PARSES COMMAND
+───────────────────────────────
+  serial_cmd.cpp:
+    - update() reads chars one-by-one into 32-byte buffer
+    - On '\n': parse() splits on commas
+    - Matches "VEL" prefix -> extracts vx=200, vy=0, wz=300
+    - Creates Command{type=VELOCITY, vx=200, vy=0, wz=300}
+
+Step 4: STATE MACHINE DISPATCHES
+─────────────────────────────────
+  robot.cpp handleCommand(VELOCITY):
+    a. Mecanum inverse kinematics:
+       Mecanum::computeFromVelocity(200, 0, 300, tickRates[])
+         - wz_mm = 200mm (lx+ly) × 300 mrad/s / 1000 = 60 mm/s
+         - wheel_FL = 200 - 0 - 60 = 140 mm/s
+         - wheel_FR = 200 + 0 + 60 = 260 mm/s
+         - wheel_RL = 200 + 0 - 60 = 140 mm/s
+         - wheel_RR = 200 - 0 + 60 = 260 mm/s
+         - Convert mm/s → ticks/period (× 0.3438):
+           tickRates = [48, 89, 48, 89] (FL, FR, RL, RR)
+    b. Motion::setMotorTickRates(tickRates)
+       - Stores as velSetpoint[0..3] for PID
+    c. Resets watchdog: lastCommandTime = millis()
+       watchdogEnabled = true (200ms timeout active)
+    d. State -> MOVING (if not already)
+
+Step 5: PID LOOP DRIVES MOTORS (50Hz, every 20ms)
+──────────────────────────────────────────────────
+  Timer1 ISR fires -> sets tick flag
+  main.cpp: if (Timer::consumeTick()) -> Robot::onTick()
+    -> Motion::update()
+
+  For EACH of the 4 motors independently:
+    1. READ ENCODER (atomic, interrupts disabled ~16μs):
+       currentTicks = Encoder::getSnapshot()
+       actualSpeed = |currentTicks - prevTicks|  (ticks since last tick)
+       prevTicks = currentTicks
+
+    2. PID COMPUTATION:
+       error = |targetRate| - actualSpeed
+       integral += error  (clamped to ±150, anti-windup)
+
+       Feed-forward (initial estimate from calibration):
+         ff = |targetRate| × 255 / calMaxTickrate[motor]
+         (uses calMaxTickrateRev if motor going backward)
+
+       PI correction:
+         correction = 1.5 × error + 0.3 × integral
+
+       Final PWM = ff + correction
+       Clamped to [0, 255]
+       Dead-zone: if PWM > 0 but < calDeadZone[motor], jump to deadzone
+       Apply sign from kinematics (+ forward, - backward)
+
+    3. RESULT (example):
+       pwm[FL]=90, pwm[FR]=167, pwm[RL]=90, pwm[RR]=167
+
+  Motor::setAll(pwm) -> writes all 4 motors atomically
+
+Step 6: PWM → PHYSICAL MOTOR ROTATION
+──────────────────────────────────────
+  motor.cpp setAll():
+    - For each motor, converts PWM 0-255 to 12-bit duty (× 16):
+        FL: PWM +90  -> IN1(CH8)=1440,  IN2(CH9)=0     (forward)
+        FR: PWM +167 -> IN1(CH13)=2672, IN2(CH12)=0    (forward)
+        RL: PWM +90  -> IN1(CH10)=1440, IN2(CH11)=0    (forward)
+        RR: PWM +167 -> IN1(CH15)=2672, IN2(CH14)=0    (forward)
+    - flushBuffer() sends all 8 channels in 2 I2C batch transactions
+
+  PCA9685 chip (I2C address 0x60, on motor shield):
+    - Generates 1600Hz PWM signal per channel
+    - CH8 at 35% duty, CH13 at 65% duty, etc.
+
+  TB67H450 H-Bridge (one per motor):
+    - IN1=PWM, IN2=LOW -> Forward mode
+    - Switches 12V battery to motor at the duty cycle
+
+  DC Motor + 90:1 Gearbox:
+    - Motor shaft spins (~3360 RPM at 35% duty)
+    - Gearbox output: ~37 RPM
+    - Mecanum wheel turns -> robot moves
+
+  Quadrature Encoder (4320 counts/revolution):
+    - Pin-change interrupt fires on each tick
+    - Arduino ISR increments counter atomically
+    - This feeds back to Step 5 on the next 50Hz tick
+
+Step 7: ODOMETRY FEEDBACK (20Hz, every 50ms)
+─────────────────────────────────────────────
+  robot.cpp handleMoving():
+    - printOdom() reads 4 encoder snapshots (atomic)
+    - Computes delta ticks since last ODOM report
+    - Mecanum::forwardKinematics(deltas) -> vx_mm, vy_mm, wz_mrad
+    - Sends "ODOM,198,0,288\n" over serial
+
+  ArduinoBridge (background read thread on V2N):
+    - Reads line, parses: command="ODOM", args=["198","0","288"]
+    - Calls on_response callback
+
+  ArduinoDriverNode._handle_arduino_response():
+    - Publishes JSON on /arduino/odom_raw topic
+
+  OdometryNode:
+    - Converts mm/s back to m/s, mrad/s to rad/s
+    - Integrates velocity -> updates robot pose (x, y, theta)
+    - Publishes ROS2 Odometry on /odom
+    - Broadcasts TF: odom -> base_link
+
+  Nav node (Core 1):
+    - Reads /odom -> knows current position
+    - Computes new error vs target
+    - Publishes updated Twist -> BACK TO STEP 1
+
+Step 8: ROBOT ARRIVES — STOPS
+─────────────────────────────
+  Nav node: distance_error < 0.22m for 0.3s -> ARRIVED
+    -> Stops publishing /cmd_vel
+
+  Safety Layer 1: ArduinoDriverNode (0.5s timeout)
+    -> No cmd_vel for 0.5s -> sends "STOP\n"
+
+  Safety Layer 2: Firmware watchdog (200ms)
+    -> No VEL for 200ms -> Motor::coastAll()
+    -> Sends "ERROR: Watchdog" (or "DONE" if STOP received)
+
+  Safety Layer 3: TB67H450 hardware
+    -> IN1=LOW, IN2=LOW -> coast mode -> motor freewheels to stop
+
+  Robot is stopped. Waiting for next /cmd_vel.
+```
+
+**Key rates in the flow:**
+
+| Component | Rate | What it does |
+|-----------|------|-------------|
+| Nav control loop | 20 Hz | Decides velocity from camera + LiDAR + odometry |
+| ArduinoDriverNode timer | 20 Hz | Converts m/s → mm/s, sends VEL over serial |
+| Firmware PID loop | 50 Hz | Reads encoder, adjusts PWM per motor |
+| PCA9685 PWM output | 1600 Hz | Switches motor power on/off |
+| Encoder interrupts | ~7680 Hz at full speed | Counts wheel rotation ticks |
+| ODOM telemetry | 20 Hz | Reports actual velocity back to ROS2 |
+| Firmware watchdog | 200ms timeout | Auto-stops if no VEL received |
+| ArduinoDriverNode timeout | 0.5s | Sends STOP if no cmd_vel received |
 
 ---
 
