@@ -1,7 +1,7 @@
 #!/bin/bash
 # Test RPLidar with different baud rates
-# Usage: ~/test_lidar.sh [baudrate]
-# Default tries 256000, then 115200
+# Usage: ~/test_lidar.sh [port] [baudrate]
+# Default: port=/dev/ttyUSB0, baudrate=256000 (falls back to 115200)
 
 export XDG_RUNTIME_DIR=/run/user/996
 source /opt/ros/humble/setup.bash

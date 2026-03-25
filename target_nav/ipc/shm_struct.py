@@ -31,7 +31,7 @@ Path        Direction     Content
 ==========  ============  ============================
 v2n_nav     nav  -> GUI   Navigation state snapshot
 v2n_laser   nav  -> GUI   Down-sampled LiDAR point cloud
-v2n_det     cam  -> GUI   Object detections
+v2n_det     cam  -> nav/GUI   Object detections
 v2n_cmd     GUI  -> nav   Command ring buffer
 ==========  ============  ============================
 """

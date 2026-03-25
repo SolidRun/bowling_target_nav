@@ -4,6 +4,38 @@ Provides ObstacleAvoidanceMixin, which implements holonomic obstacle avoidance
 for a mecanum-drive robot using a simplified VFH algorithm. The mixin is
 composed into the Navigator class via multiple inheritance.
 
+VFH Algorithm Overview:
+    VFH divides the robot's surroundings into angular sectors and builds a
+    polar histogram of obstacle distances. The robot then finds the widest
+    "gap" (obstacle-free sector) closest to its desired heading and steers
+    through it.
+
+    Step 1 — Polar histogram:
+        The front 180° is divided into VFH_NUM_BINS (36) sectors of 10° each.
+        For each LiDAR point, the nearest-obstacle distance is recorded in
+        the corresponding sector bin.
+
+    Step 2 — Gap finding:
+        A "gap" is a contiguous run of bins where ALL obstacles are farther
+        than obstacle_distance + VFH_CLEARANCE_MARGIN (0.10m) and the gap
+        is wide enough for the robot body (robot_half_width + VFH_BODY_MARGIN).
+        The gap whose center is closest to the target bearing is chosen.
+
+    Step 3 — Direction commitment:
+        Once a gap direction (left or right) is chosen, the robot commits to
+        it for VFH_AVOID_COMMIT_SECS (1.5s) to prevent oscillation between
+        nearby gaps.
+
+    Step 4 — Mecanum strafing:
+        Unlike differential-drive VFH, the mecanum robot can strafe through
+        the gap while independently rotating to keep the camera on target
+        (fused mode). This allows obstacle avoidance without losing sight
+        of the target.
+
+    Step 5 — Emergency backup:
+        If no passable gap exists, the robot reverses slowly. After
+        VFH_STUCK_TIMEOUT_SECS (3.0s) of backing up, a full stop is triggered.
+
 Key methods:
   - direct_navigate(): Main entry point -- drives toward a target with VFH
     gap-finding when obstacles are detected in the front corridor.

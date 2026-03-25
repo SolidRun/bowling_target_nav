@@ -124,7 +124,7 @@ class MainGUI(Gtk.Window):
         self.connect('key-press-event', self._on_key)
         self.connect('destroy', self.on_quit)
 
-        # 15 FPS refresh — smooth radar view while saving CPU on embedded
+        # 10 FPS refresh — smooth radar view while saving CPU on embedded
         # Single timer at 100ms (10 FPS). SHM polling is done by external
         # _gui_poll_shm callback added in main_multiprocess(). Only ONE timer
         # runs in GTK main loop to leave time for input event processing.

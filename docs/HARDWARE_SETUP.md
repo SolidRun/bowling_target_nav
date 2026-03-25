@@ -44,7 +44,7 @@
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Base size | 250 x 260 x 150 mm | Robot body (L x W x H) |
+| Base size | 300 x 260 x 150 mm | Robot body (L x W x H) |
 | Base mass | ~5.0 kg | Approximate total weight |
 | Wheel diameter | 80 mm (radius 40 mm) | Mecanum wheels |
 | Wheelbase | 190 mm | Front-rear axle distance |
@@ -84,7 +84,7 @@ Wheel indices (firmware order):
 | Microcontroller | Arduino (Mega/Uno) | USB Serial | Motor control + encoder reading |
 | LiDAR | RPLidar A1 | USB Serial | 360° 2D laser scanner |
 | Camera | USB camera (generic) | USB V4L2 | Front-facing for YOLO detection |
-| Display | HDMI monitor | HDMI | GUI output (Wayland/Weston) |
+| Display | DSI touchscreen | DSI-1 | GUI output (Wayland/Weston, rotated 180°) |
 | Network | WiFi AP | WiFi | Access point at 192.168.50.1 |
 
 ---
@@ -166,7 +166,7 @@ VEL,vx,vy,wz
 
 **200ms Watchdog**: Motors automatically stop if no `VEL` command is received within 200ms. The ROS node must resend at >=5 Hz.
 
-**Dead Zone**: Commands with `|vx|, |vy|, |wz| < 10` trigger automatic STOP.
+**Dead Zone**: Commands with `|vx|, |vy|, |wz| < 3` trigger automatic STOP.
 
 ### Simple Commands
 
@@ -175,7 +175,7 @@ VEL,vx,vy,wz
 | `STOP` | Emergency stop all motors |
 | `READ` | Read 4 encoder values (returns 4 lines: FL, RL, RR, FR) |
 | `SYNC` | Synchronize communication |
-| `CALIB` | Start motor calibration (~15 seconds) |
+| `CALIB` | Start motor calibration (~40 seconds) |
 | `RESET` | Reset encoder counters to zero |
 
 ### GUI Motor Calibration (via Settings → Tools tab)
@@ -205,7 +205,7 @@ This is the recommended way to calibrate motors — no terminal access needed.
 
 ```
 ODOM,vx_mm,vy_mm,wz_mrad      # Odometry velocities
-ENC,FL:ticks,FR:ticks,RL:ticks,RR:ticks,t_us:microseconds
+ENC,FL:ticks,RL:ticks,RR:ticks,FR:ticks,t_us:microseconds
 CALIB,progress                  # During calibration
 STALL,motor_info                # Stall detection
 ```
@@ -316,7 +316,7 @@ distance = reference_distance * (reference_bbox_height / current_bbox_height)
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `reference_bbox_height` | 100 px | Bounding box height at reference distance |
+| `reference_bbox_height` | 180 px | Bounding box height at reference distance |
 | `reference_distance` | 1.0 m | Known distance for calibration |
 | `horizontal_fov` | 60° | Camera field of view |
 
@@ -327,6 +327,21 @@ focal_length = (frame_width / 2) / tan(fov / 2)
 offset_x = center_x - frame_width / 2
 angle = atan2(offset_x, focal_length)
 ```
+
+### Calibration Walkthrough
+
+To calibrate distance estimation for your camera:
+
+1. Place a bowling pin at exactly **1.0 meter** from the camera
+2. Open the GUI → Settings → Sensors → Calibration
+3. Enter **1.0** in the "Known dist" spinner
+4. Press **CALIBRATE** — the system reads the bounding box height automatically
+5. The result label shows: `OK: 180px @ 1.00m` (your values will vary)
+6. The reference values are saved automatically
+
+For manual calibration, adjust the H (height in pixels) and @ (distance in meters) spinners directly.
+
+If the robot consistently under/over-estimates distance, re-calibrate at a different distance (e.g., 0.5m or 2.0m) for better accuracy at that range.
 
 ---
 
@@ -407,11 +422,11 @@ wz = (-FL + FR - RL + RR) / (4 * L) * wheel_radius
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Max wheel speed | 11.2 rad/s | At PWM 255 |
-| Max linear speed | 0.448 m/s | `11.2 * 0.04` |
-| Max angular speed | 2.24 rad/s | `0.448 / 0.200` |
-| Software linear limit | 0.30 m/s | Configurable |
-| Software angular limit | 0.50 rad/s | Configurable |
+| Max wheel speed | 10.9 rad/s | At PWM 255 (measured) |
+| Max linear speed | 0.436 m/s | Measured at PWM 255 |
+| Max angular speed | 2.18 rad/s | Measured at PWM 255 |
+| Software linear limit | 0.20 m/s | Default (configurable 0.05–0.60) |
+| Software angular limit | 0.40 rad/s | Default (configurable 0.10–1.50) |
 | Minimum PWM | 20 | Below this, motors stall |
 
 ### Odometry Covariance

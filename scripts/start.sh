@@ -37,7 +37,7 @@ if [ "$1" == "--stop" ]; then
     pkill -f "ros2 launch target_nav" 2>/dev/null || true
     pkill -f "arduino_driver" 2>/dev/null || true
     pkill -f "rplidar" 2>/dev/null || true
-    pkill -f "slam_camera" 2>/dev/null || true
+    pkill -f "app_yolo_cam" 2>/dev/null || true
     sleep 1
     echo -e "${GREEN}[OK]${NC} Robot stopped"
     exit 0

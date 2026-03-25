@@ -30,15 +30,15 @@ The GUI is a fullscreen GTK3 application running on Wayland/Weston. It displays 
 │  │                        │  │                    ┌──────────┐│ │
 │  │      Radar View        │  │     Camera Feed    │NAVIGATING││ │
 │  │                        │  │                    └──────────┘│ │
-│  │   ● Robot (green)      │  │   ┌────┐                      │ │
-│  │   · Laser (red)        │  │   │ btl│ 0.45m  12°           │ │
-│  │   ◇ Target (magenta)   │  │   └────┘                      │ │
-│  │   ─ Nav path (magenta) │  │                                │ │
+│  │   ■ Robot (green)      │  │   ┌────┐                      │ │
+│  │   · Laser (cyan)       │  │   │pin│ 0.45m  12°            │ │
+│  │   ◇ Target (red)       │  │   └────┘                      │ │
+│  │   ▲ Camera FOV (green) │  │                                │ │
 │  │                        │  │              v=0.12 m/s  w=5°/s│ │
 │  │  Robot: (1.2, 0.5) 45° │  │  Detection: Target: 0.45m, 12° │ │
 │  └────────────────────────┘  └────────────────────────────────┘ │
 │                                                                  │
-│  [GO TO TARGET]  [STOP]  ● NAVIGATING 0.45m      [SETTINGS][QUIT]│
+│  [GO TO TARGET] [STOP] [CAP] NAVIGATING 0.45m  [QUIT] [SETTINGS] │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,13 +53,14 @@ The GUI is a fullscreen GTK3 application running on Wayland/Weston. It displays 
 The window is divided into three vertical sections:
 
 ### Title Bar (Top 50px)
-- **"V2N Target Control"** — Blue, 20px font
-- **Subtitle** — Shows detector mode (green when DRP-AI active, gray otherwise), 14px
+- **"V2N Target Control"** — Blue (#58A6FF), 20px font
+- **Subtitle** — `"{detector_mode} + LiDAR + Navigation"` (green when DRP-AI active, gray otherwise), 14px, offset 280px right
 
 ### Content Area (Middle, fills remaining space)
 - Split 50/50 into left (Map) and right (Camera) panels
 - 10px margin around edges, 10px gap between panels
-- Each panel has a dark background (#161b22) with gray border (#30363d)
+- Radar panel: dark background (#0D0D14) with gray border (#303C3D)
+- Camera panel: dark background (#161B22), no border
 
 ### Control Bar (Bottom, 50px min height)
 - Horizontal box with 20px spacing, 20px margins
@@ -75,28 +76,33 @@ The window is divided into three vertical sections:
 
 | Element | Color | Description |
 |---------|-------|-------------|
-| Robot | Green circle + white arrow | Current position and heading |
-| Laser dots | Red dots | Live LiDAR scan points |
-| Nav target | Magenta diamond | Target position in odom frame |
-| Nav path | Magenta line | Line from robot to target |
-| Grid | Gray lines | Drawn when zoom > 15px/meter |
+| Robot body | Green rectangle + wheels | True-to-scale from physical dimensions |
+| Front edge | Bright green + "F" label | Shows robot forward direction |
+| Forward arrow | Yellow | Heading arrow (configurable length) |
+| Laser dots | Cyan (#00FF99) | Live LiDAR scan points (rectangles, faster than arcs) |
+| Nav target | Red diamond | Target position in odom frame with distance label |
+| Camera FOV | Green wedge | Camera field-of-view cone with "CAM" label |
+| LiDAR marker | Red circle | LiDAR position with "LDR" label and 360° scan ring |
+| Grid | Gray circles | Distance circles at 1m increments (when show_grid=True) |
+| Sensor offsets | Dashed lines | Camera (green) and LiDAR (red) offset from base_link |
 
 ### How Radar Rendering Works
 
-1. Robot position is obtained from TF (`odom → base_link`)
-2. LiDAR points from `/scan` are transformed from robot frame to odom frame and plotted
-3. Navigation target (if any) is drawn as a diamond with a line from robot
+1. Robot is always at center (ego-centric view, rotates with robot)
+2. LiDAR points are plotted in robot-relative coordinates (X=forward→screen up, Y=left→screen left)
+3. Points inside robot body footprint are filtered out (self-reflections)
+4. Navigation target (if any) is drawn as a red diamond with distance label from camera position
 
-### Diagnostic Overlay (Bottom of Radar Panel)
+### Diagnostic Footer (Bottom of Radar Panel)
 
-Diagnostic information is displayed below the radar:
+Two-line display below the radar:
 
-1. **Robot pose**: `Robot: (1.23, 0.45) 67°`
-2. **Topic rates + TF age**: `Scan: 5.5Hz (360pts) | TF age: 0.1s` -- Color-coded: green (<0.5s), yellow (<2s), red (>2s)
+1. **Robot pose** (green): `Robot: (1.23, 0.45) 67°`
+2. **Scan info** (light blue): `Scan: 5.5Hz (360pts)  |  Range: 5m`
 
 ### Radar Zoom
 
-The radar range can be adjusted via +/- buttons in the top-right corner of the radar panel, or keyboard shortcuts (+/-). Steps: 1, 2, 3, 5, 8, 10, 15, 20 meters.
+The radar range can be adjusted via +/- buttons (28x28px) in the top-right corner of the radar panel, or keyboard shortcuts (+/-/=). Steps: 1, 2, 3, 5, 8, 10, 15, 20 meters. The Settings slider limits to 1–10, but zoom buttons allow up to 20m.
 
 ---
 
@@ -115,6 +121,8 @@ The radar range can be adjusted via +/- buttons in the top-right corner of the r
 
 Note: The C++ DRP-AI binary draws all detection overlays (bounding boxes, crosshairs, distance labels) on the frame before writing it to shared memory. The Python camera panel just displays the pre-rendered frame plus the nav-state badge and info bar.
 
+**CLIP indicator**: When a detection bounding box touches within 5px of any frame edge, it is marked as "clipped". This means the target extends beyond the visible frame, making the vision distance estimate unreliable (the bbox height is truncated). When CLIP is active, the navigator prefers LiDAR distance over camera distance, and the info bar shows an orange "CLIP" label next to the confidence percentage.
+
 ### State Badge Colors (Camera Panel)
 
 These are Cairo RGB values from `camera_panel.py`, rendered as semi-transparent rectangles in the top-right corner of the camera feed:
@@ -122,20 +130,23 @@ These are Cairo RGB values from `camera_panel.py`, rendered as semi-transparent 
 | State | RGB | Hex | Display |
 |-------|-----|-----|---------|
 | NAVIGATING | (0.137, 0.533, 0.212) | #238836 | Dark green |
-| SEARCHING | (0.886, 0.686, 0.0) | #E2AF00 | Gold |
-| BLIND APPROACH | (0.902, 0.557, 0.149) | #E68E26 | Orange |
-| ARRIVED | (0.122, 0.435, 0.918) | #1F6FEA | Blue |
-| IDLE | (0.35, 0.38, 0.42) | #59616B | Gray |
+| SEARCHING | (0.886, 0.686, 0.0) | #E1AE00 | Gold |
+| SPIRAL SEARCH | (0.878, 0.565, 0.251) | #E09040 | Darker orange |
+| BLIND APPROACH | (0.902, 0.557, 0.149) | #E68E25 | Orange |
+| ARRIVED | (0.122, 0.435, 0.918) | #1F6EEA | Blue |
+| IDLE | (0.35, 0.38, 0.42) | #59606B | Gray |
 | ERROR | (0.855, 0.212, 0.200) | #DA3633 | Red |
 
 > Note: The badge displays `nav_state.replace("_", " ")`, so "BLIND_APPROACH" appears as "BLIND APPROACH".
 
 ### Info Bar (Bottom, 80px)
 
-Three-column display:
-- **Col 1**: Camera distance (m) + vision angle
-- **Col 2**: LiDAR distance (m)
-- **Col 3**: Confidence % (color-coded) + speed + detector mode
+Three equal-width columns with dark background (#1C2129):
+
+- **Col 1 — Camera distance** (large green #33FF80): `0.45m` + small `vision +12°`. Shows `--.-m` when no target.
+- **Col 2 — LiDAR distance** (large light blue #40BBFF): `0.42m` + small `lidar` when matched, `sensor` otherwise. Shows `--.-m` when no match.
+- **Col 3 — Confidence** (large, color-coded): `85%` (green >=70%, yellow 50-70%, red <50%). Shows `CLIP` indicator (orange #FF4C00) when bbox touches frame edge. Speed/omega line always shown: light blue when moving (speed>0.001 or wz>0.01), gray when stopped.
+- **Bottom row**: Detector mode string (small gray), e.g. "DRP-AI Stream"
 
 ---
 
@@ -153,7 +164,7 @@ Three-column display:
 
 - **GO**: Writes a GO command to the CmdRingBuffer in SHM. Nav process picks it up on next 20Hz poll cycle (within 50ms). Robot starts searching/navigating.
 - **STOP**: Writes a STOP command to the CmdRingBuffer. Robot stops immediately. Navigation state resets to IDLE.
-- **CAP**: Saves the current camera frame as a PNG to `/root/captures/cap_YYYYMMDD_HHMMSS.png`. Button turns green on success, red on failure, resets after 1.5s.
+- **CAP**: Saves the current camera frame as a PNG to `/root/captures/cap_YYYYMMDD_HHMMSS.png` (pure Python PNG encoder, no OpenCV). Button label changes to "OK" (green) on success, "FAIL" (red) on failure, resets to "CAP" after 1.5s.
 - **SETTINGS**: Switches the Gtk.Stack to the settings view (same window, no separate dialog). Press BACK or ESC to return.
 - **QUIT**: Sends STOP to motors, calls `state.request_shutdown()`, stops GTK main loop, all processes clean up.
 
@@ -161,30 +172,31 @@ Three-column display:
 
 ## 6. Status Bar
 
-Located between STOP and SETTINGS buttons, the status label shows navigation state with color-coded Pango markup.
+Located between CAP and QUIT buttons, the status label shows navigation state with color-coded Pango markup. It expands to fill available space.
 
 ### Status Format
 
 ```
-● NAVIGATING  0.45m  v=0.12m/s  ⚠ obstacle 0.3m
+NAVIGATING  Sensor: 0.45m  Dist: 0.42m  0.12 m/s  ! OBS 0.30m
 ```
 
-### State Indicators
+### State Indicators (Pango markup colors)
 
-| State | Indicator | Color | Additional Info |
-|-------|-----------|-------|-----------------|
-| IDLE | `◯ IDLE` | Gray (#8b949e) | — |
-| SEARCHING | `⬤ SEARCHING` | Gold (#e3b341) | Search time in seconds |
-| NAVIGATING | `⬤ NAVIGATING` | Green (#3fb950) | Distance to target |
-| BLIND_APPROACH | `⬤ BLIND_APPROACH` | Orange (#ffa657) | Distance remaining |
-| ARRIVED | `⬤ ARRIVED` | Blue (#58a6ff) | — |
-| ERROR | `⬤ ERROR` | Red (#f85149) | Error message |
+| State | Color | Additional Info |
+|-------|-------|-----------------|
+| IDLE | Gray (#6e7681) | "Press GO to start" |
+| NAVIGATING | Green (#50fa7b) | Sensor distance, map distance, speed |
+| SEARCHING | Gold (#f0d050) | Elapsed time, lost time |
+| SPIRAL_SEARCH | Orange (#e09040) | Elapsed time, lost time, speed |
+| BLIND_APPROACH | Orange (#ffb347) | "Dead-reckoning", map distance, lost time |
+| ARRIVED | Blue (#69b4ff) | "at target!" |
+| ERROR | Red (#ff6b6b) | Error message |
 
-### Optional Status Additions
+### Status Additions
 
-- **Obstacle warning**: `⚠ obstacle 0.30m` (when obstacle < 0.3m)
-- **Speed**: `v=0.12m/s` (when speed > 0.01 m/s)
-- **Lost time**: `lost 2.1s` (when target not visible)
+- **Map distance** (color-coded): Green (#50fa7b) if <0.20m, yellow (#f0d050) if <0.50m, blue (#79c0ff) otherwise
+- **Obstacle warning** (red #ff6b6b): `! OBS 0.30m` when `obstacle_ahead == True`
+- **Speed** (light blue #79c0ff): `0.12 m/s` when speed > 0.01 m/s
 
 ---
 
@@ -216,9 +228,9 @@ Sub-tabs: **Speed**, **Target**, **Approach**.
 
 | Sub-tab | Parameters |
 |---------|------------|
-| Speed | Linear Speed (0.05–0.60, default 0.20 m/s), Min Speed (0.03–0.30, default 0.10 m/s), Angular Speed (0.10–1.50, default 0.40 rad/s) |
-| Target | Approach Distance (0.0–2.0, default 0.22 m), Lost Timeout (0.5–30.0, default 3.0 s) |
-| Approach | Obstacle Distance (0.05–2.0, default 0.22 m), Obstacle Slowdown Distance (0.1–3.0, default 0.45 m) |
+| Speed | Forward Speed (0.05–0.40, default 0.20 m/s), Min Speed (0.03–0.20, default 0.10 m/s), Rotation Speed (0.10–1.00, default 0.40 rad/s) |
+| Target | Stop Distance (0.03–0.50, default 0.22 m), Obstacle Distance (0.10–0.50, default 0.22 m), Slowdown Zone (0.20–1.00, default 0.45 m), Target Lost Timeout (1.0–15.0, default 3.0 s) |
+| Approach | Entry Distance (0.15–1.00, default 0.35 m), Approach Speed (0.03–0.20, default 0.10 m/s), Timeout (3.0–30.0, default 10.0 s), LiDAR Stop (0.05–0.30, default 0.15 m), Arrival Margin (0.03–0.30, default 0.10 m) |
 
 ### Tab 2: Search
 
@@ -226,10 +238,8 @@ Sub-tabs: **Scan**, **Spiral**.
 
 | Sub-tab | Parameters |
 |---------|------------|
-| Scan | Search Timeout (5.0–120.0, default 30.0 s), Search Angular Speed (0.05–2.0, default 0.50 rad/s) |
-| Spiral | Spiral Enabled (toggle, default On), Initial Radius (0.1–5.0, default 0.3 m), Max Radius (0.5–10.0, default 2.0 m), Growth Rate (0.01–1.0, default 0.15 m/rev), Linear Speed (0.01–1.0, default 0.10 m/s), Angular Speed (0.01–2.0, default 0.25 rad/s), Timeout (5.0–120.0, default 45.0 s) |
-
-Blind approach parameters are also in this tab: Entry Distance (0.1–2.0, default 0.35 m), Approach Speed (0.01–0.5, default 0.10 m/s), Timeout (1.0–30.0, default 10.0 s), LiDAR Stop (0.05–1.0, default 0.15 m), Arrival Margin (0.01–1.0, default 0.10 m).
+| Scan | Scan Speed (0.05–1.00, default 0.50 rad/s), Scan Timeout (10.0–90.0, default 30.0 s) |
+| Spiral | Spiral Enabled (toggle, default On), Start Radius (0.1–1.0, default 0.3 m), Max Radius (0.5–5.0, default 2.0 m), Growth Rate (0.05–0.50, default 0.15 m/rev), Spiral Speed (0.05–0.30, default 0.10 m/s), Turn Speed (0.1–0.5, default 0.25 rad/s), Spiral Timeout (10.0–120.0, default 45.0 s) |
 
 ### Tab 3: Sensors
 
@@ -238,9 +248,9 @@ Sub-tabs: **Detection**, **Calibration**, **Mounting**, **DRP-AI**.
 | Sub-tab | Parameters |
 |---------|------------|
 | Detection | Confidence Threshold (0.05–0.95, default 0.30), Detection Memory (0.3–5.0, default 4.0 s) |
-| Calibration | Auto-calibrate button (place target at known distance), manual ref box height/distance, target dimensions (height/width), camera FOV (10–170°, default 60°), distance reference point (center/front/camera/lidar) |
-| Mounting | Robot dimensions (length/width/height), LiDAR position (X/Y/Z) + yaw (0–360°, default 180°), Camera position (X/Y/Z) + yaw (-180–180°, default 0°), robot diagram |
-| DRP-AI | C++ confidence threshold (0.10–0.95, default 0.20), NMS threshold (0.10–0.95, default 0.45), Max detections (1–20, default 1), DRP core frequency, AI-MAC frequency, Restart DRP-AI button |
+| Calibration | Auto-calibrate button (place target at known distance, enter known dist 0.1–5.0m), manual ref box height/distance spinners, target dimensions Height (5–100cm) and Width (2–50cm), camera FOV (30–120°, default 60°), distance reference point (Center/Front edge/Camera/LiDAR) |
+| Mounting | Robot dimensions (length 10–60cm, width 10–60cm, height 5–40cm), LiDAR position (Fwd ±20cm, Lat ±20cm, Ht 0–30cm) + yaw (-360–360°, default 180°, presets: 0/±45/±90/±135/±180), Camera position (Fwd ±20cm, Lat ±20cm, Ht 0–30cm) + yaw (-360–360°, default 0°), live robot diagram |
+| DRP-AI | AI Confidence (0.10–0.95, default 0.20), NMS Threshold (0.10–0.95, default 0.45), DRP Core frequency dropdown, AI-MAC frequency dropdown, Apply & Restart DRP-AI button |
 
 ### Tab 4: Radar
 
@@ -248,9 +258,9 @@ Flat page (no sub-tabs). Controls the radar view panel appearance.
 
 | Parameter | Range | Default | Effect |
 |-----------|-------|---------|--------|
-| Radar Range | 1–20 | 5 | Radar view radius in meters |
+| Radar Range | 1–10 | 5 | Radar view radius in meters |
 | Laser Point Size | 1–5 | 2 | LiDAR dot size in pixels |
-| Arrow Length | 8–50 | 20 | Heading arrow length in pixels |
+| Arrow Length | 10–40 | 20 | Heading arrow length in pixels |
 | Show Grid | Toggle | On | Show/hide distance circles |
 | Show Nav Target | Toggle | On | Show/hide navigation target diamond |
 
@@ -262,8 +272,8 @@ Sub-tabs: **Drive**, **Motors**, **System**.
 
 | Sub-tab | Content |
 |---------|---------|
-| Drive | Hold-to-move motor test buttons (Forward, Backward, Left, Right, Turn L, Turn R) with configurable speed. Motors run while button is held, stop on release. |
-| Motors | Arduino commands: CALIBRATE (`CALIB`), SYNC, READ, RESET ENC. Reset Odometry button. |
+| Drive | 12-button direction grid (FWD, BWD, LEFT, RIGHT, FL, FR, BL, BR diagonals, TL/TR rotation, STOP). Speed slider (0.05–0.40 m/s), duration slider (0.5–5.0s). Buttons send timed Twist commands with 150ms repeat for firmware watchdog. |
+| Motors | Single motor test: PWM slider (0–200), Forward/Reverse radio, duration spinner (0.5–5.0s), per-motor buttons (FL, FR, BL, BR). Sends `TMOTOR,id,pwm` to Arduino. Encoder section: READ ENCODERS, ENCODER TEST (`TENC`), STOP. Motor calibration: START CALIBRATION (`CALIB`, ~40s), ABORT. Reset Odometry button. |
 | System | Reset All Defaults button (resets all navigation, map, and detection parameters to factory defaults). |
 
 ### Auto-Save Behavior

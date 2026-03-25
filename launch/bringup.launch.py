@@ -21,8 +21,8 @@ Usage:
     # Custom serial ports:
     ros2 launch target_nav bringup.launch.py arduino_port:=/dev/ttyACM1 lidar_port:=/dev/ttyUSB1
 
-    # Without Arduino (LiDAR + TF only):
-    ros2 launch target_nav bringup.launch.py enable_arduino:=false
+    # Custom LiDAR frame:
+    ros2 launch target_nav bringup.launch.py lidar_frame:=rplidar
 """
 
 import os

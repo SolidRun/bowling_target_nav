@@ -329,12 +329,12 @@ do_stop() {
 
     # Kill all robot processes
     pkill -f "main_gui" 2>/dev/null || true
-    pkill -f "slam_camera_gui" 2>/dev/null || true
+    pkill -f "nav_node" 2>/dev/null || true
     pkill -f "rplidar" 2>/dev/null || true
     pkill -f "arduino_driver" 2>/dev/null || true
     pkill -f "odometry_node" 2>/dev/null || true
     pkill -f "robot_state_publisher" 2>/dev/null || true
-    pkill -f "nav2" 2>/dev/null || true
+    pkill -f "app_yolo_cam" 2>/dev/null || true
 
     sleep 2
 

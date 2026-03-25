@@ -5,6 +5,18 @@ NavNode.control_loop(). It manages the navigation state machine,
 uses TargetTracker for validated/smoothed target positions, and
 delegates low-level motion to the Navigator.
 
+State machine diagram::
+
+    IDLE ──(GO)──> NAVIGATING ──(arrived)──> ARRIVED
+      ^                |   |                    |
+      |                |   └──(close+lost)──> BLIND_APPROACH
+      |                |                        |
+      |                └──(lost>timeout)──> SEARCHING
+      |                                       |
+      |                                 SPIRAL_SEARCH
+      |                                       |
+      └───────────(STOP / exhausted)──────────┘
+
 State machine transitions::
 
     IDLE --(GO)--> NAVIGATING

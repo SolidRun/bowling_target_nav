@@ -159,7 +159,7 @@ No locks, no mutexes, no CAS. The SPSC invariant guarantees correctness.
 | DRP-AI inference | ~10 fps | ~100 ms per inference |
 | Struct SHM write/read | 20 Hz | <1 ms (mmap, no serialization) |
 | Navigator control loop | 20 Hz | ~50 ms per tick |
-| Arduino serial | 200 Hz watchdog | ~5 ms per command |
+| Arduino serial | 20 Hz (200ms watchdog) | ~5 ms per command |
 | Encoder feedback | 20 Hz | ~50 ms per update |
 | GUI render | 10 fps | ~100 ms per frame |
 
@@ -181,90 +181,25 @@ No locks, no mutexes, no CAS. The SPSC invariant guarantees correctness.
 
 ---
 
-## 7. Navigation Pipeline
+## 7. Navigation, Detection Filtering, and Algorithms
 
-The Navigator runs a 20 Hz control loop with these stages:
+See [NAVIGATION.md](NAVIGATION.md) for the complete navigation reference:
 
-```
-detect --> Kalman track --> map goal --> navigate --> refine --> blind approach --> arrive
-```
-
-1. **Detect:** Camera process writes detections to struct SHM. Nav process reads via DetShmReader at 20 Hz.
-2. **Track:** TargetTracker validates detections (size-distance gate, shape filter), matches with LiDAR, and runs a Kalman filter for smoothed position.
-3. **Odom goal:** Navigator projects the tracked target into the odom frame using the robot's current pose, producing a (x, y) goal in odom coordinates.
-4. **Navigate:** The robot drives toward the goal using holonomic control (mecanum wheels allow simultaneous forward + strafe + rotate). VFH obstacle avoidance steers around obstacles detected by LiDAR.
-5. **Refine:** Each new detection updates the Kalman state and the odom goal. The robot continuously corrects its trajectory.
-6. **Blind approach:** When the target drops below the LiDAR's minimum range (~0.15 m) or the bounding box clips the frame edge, the Navigator switches to dead-reckoning toward the last known goal using odometry only.
-7. **Arrive:** Arrival is confirmed through multi-signal temporal fusion: smallest distance from all sources stays within approach_distance for 0.3 s.
-
-### State Transitions
-
-```
-IDLE --> NAVIGATING --> BLIND_APPROACH --> ARRIVED
-  ^          |                |               |
-  |          v                v               |
-  +------ SEARCHING <--------+               |
-  +-------------------------------------------+
-```
-
-- **IDLE:** Waiting for user GO command.
-- **NAVIGATING:** Driving toward a visible bowling-pin with obstacle avoidance.
-- **SEARCHING:** Target lost for > lost_timeout; 360-degree rotation scan, then spiral.
-- **BLIND_APPROACH:** Target below LiDAR min range; dead-reckoning to last known position.
-- **ARRIVED:** Target reached. Terminal state; requires user GO to restart.
+- State machine (IDLE → NAVIGATING → SEARCHING → SPIRAL_SEARCH → BLIND_APPROACH → ARRIVED)
+- VFH obstacle avoidance algorithm
+- Detection filtering pipeline (3-layer false positive rejection)
+- Kalman-filtered target tracking with LiDAR fusion
+- Speed ramp and arrival detection
+- Sensor offset model and distance fusion
+- Troubleshooting guide
 
 ---
 
-## 8. Sensor Offset Model
-
-The camera and LiDAR are mounted at different positions on the robot. This creates a discrepancy between vision-estimated distance and LiDAR-measured distance that must be accounted for.
-
-```
-        Camera (forward-facing, elevated)
-           |
-           |  camera_offset_x = 0.15m (forward from base_link)
-           |
-      base_link ---- LiDAR (offset_x = 0.12m forward)
-```
-
-- **Camera distance:** Estimated from bounding-box height using a Python pinhole model with reference-point calibration. Less accurate but works at all ranges.
-- **LiDAR distance:** Measured directly from the laser scan at the detection's bearing angle. Accurate but has a 0.15 m minimum range (blind zone).
-- **Fusion rule (TargetTracker):** LiDAR distance is preferred when a matching obstacle is found within the angular and distance window. Camera distance is used otherwise. The Kalman filter uses lower measurement noise for LiDAR-confirmed readings.
-- **Reference points:** The distance estimator supports four reference points: "center" (base_link), "front" (bumper), "camera", and "lidar". The chosen reference affects the arrival distance threshold.
-- **Blind zone:** Below ~0.15 m from the LiDAR, only vision and odometry are available. The blind approach phase handles this region.
+## 8. Configuration
 
 ---
 
-## 9. Configuration
-
-### Single Source of Truth: `config.py`
-
-All compile-time constants live in `target_nav/config.py`:
-
-- Navigation parameters (speeds, thresholds, timeouts)
-- Hardware settings (serial ports, baud rates, camera resolution)
-- Detection parameters (confidence threshold, expiry time)
-- Sensor geometry (camera/LiDAR offsets)
-- Target profile (bowling-pin: 0.28m height, 0.08m width)
-- Process affinity (core assignments)
-
-### Runtime Settings: `SettingsStore`
-
-Tunable parameters that users adjust through the GUI settings panel at runtime:
-
-- Detection confidence threshold
-- Reference box height and distance (calibration)
-- Navigation speed limits
-- Obstacle avoidance distances
-- Map rendering options
-
-### Persistence: `calibration.json`
-
-Runtime settings are persisted to `~/.config/target_nav/calibration.json`. Changes auto-save with a 2 s debounce. On startup, saved values override `config.py` defaults for any keys present in the JSON file.
-
----
-
-## 10. Why No Standard ROS2 Packages?
+## 8. Why No Standard ROS2 Packages?
 
 | Package | Why not used | What we use instead |
 |---------|-------------|-------------------|

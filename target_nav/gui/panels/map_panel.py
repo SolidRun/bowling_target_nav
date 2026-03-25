@@ -12,7 +12,7 @@ Coordinate system (robot base_link -> screen):
         screen_y = center_y - point_x * ppm
     where ppm = pixels_per_meter = panel_size / (2 * radar_range).
 
-Cairo drawing pipeline (per frame, ~15 FPS):
+Cairo drawing pipeline (per frame, 10 FPS):
     1. Background fill + border stroke.
     2. Distance circles (1m increments) + crosshair if show_grid.
     3. LiDAR points: vectorized numpy transform to screen coords, then

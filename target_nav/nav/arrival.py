@@ -119,8 +119,8 @@ class ArrivalMixin:
                 self._arrival_first_seen = now
                 self._logger.info(
                     f"Arrival zone: best={best_dist:.2f}m "
-                    f"(robot={robot_dist:.2f if robot_dist else 'N/A'}m "
-                    f"map={map_dist:.2f if map_dist else 'N/A'}m "
+                    f"(robot={f'{robot_dist:.2f}' if robot_dist is not None else 'N/A'}m "
+                    f"map={f'{map_dist:.2f}' if map_dist is not None else 'N/A'}m "
                     f"sensor={distance:.2f}m) thresh={threshold:.2f}m")
             elif now - self._arrival_first_seen >= self._arrival_confirm_time:
                 self._logger.info(

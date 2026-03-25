@@ -26,7 +26,7 @@ Firmware Protocol (plain text, newline-terminated, NO checksums):
 
     Telemetry (20Hz during VEL mode):
         ODOM,vx_mm,vy_mm,wz_mrad    Body-frame velocities from encoder FK
-        ENC,FL:t,FR:t,RL:t,RR:t,t_us:t   Raw encoder positions + timestamp
+        ENC,FL:t,RL:t,RR:t,FR:t,t_us:t   Raw encoder positions + timestamp
 
     Timing constraints:
         - 200ms watchdog in VEL mode (motors stop if no VEL received)

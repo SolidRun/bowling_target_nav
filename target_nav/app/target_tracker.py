@@ -9,8 +9,41 @@ Pipeline per tick (20 Hz):
        the expected height for the measured distance (physics-based filter).
     2. LiDAR Match: find the LiDAR obstacle closest to the camera detection
        angle and distance. Use LiDAR distance when matched (more accurate).
-    3. Kalman Filter: smooth [distance, angle, d_velocity, a_velocity] and
-       predict position during detection drops (up to predict_timeout).
+    3. Kalman Filter: smooth and predict position during detection drops.
+
+Kalman Filter Details:
+    State vector (4D): [distance, angle, d_velocity, a_velocity]
+        - distance:   straight-line distance to target (meters)
+        - angle:      bearing in base_link frame (radians, positive = left)
+        - d_velocity: rate of change of distance (m/s, negative = approaching)
+        - a_velocity: rate of change of angle (rad/s)
+
+    Process model: constant-velocity (naive integration)
+        x_predicted = x + velocity * dt
+
+    Measurement: [distance, angle] from camera (or LiDAR-fused distance)
+        - Camera gives both distance (from pinhole model) and angle
+        - LiDAR gives more accurate distance when matched (lower noise R)
+
+    Noise tuning (DEFAULT_TRACKER_PARAMS in config.py):
+        - kf_q_* (process noise): higher = trusts measurements more
+        - kf_r_cam_* (camera noise): higher = trusts model/prediction more
+        - kf_r_lidar_* (LiDAR noise): lower than camera = prefers LiDAR
+
+    Prediction: when no detection, Kalman predicts position using velocity
+        model for up to predict_timeout (3.0s). After that, track is dropped.
+
+Size-Distance Gate:
+    Expected bbox height = ref_box_height * (ref_distance / measured_distance)
+    If actual bbox height differs by more than size_gate_tolerance (50%),
+    the detection is rejected. This filters false positives like chair legs
+    or wall edges that have wrong size for their distance.
+
+LiDAR Matching:
+    For each camera detection, search LiDAR points within ±lidar_angle_window
+    (10°) of the detection bearing. If a LiDAR point is within
+    lidar_dist_tolerance (50%) of the camera distance, use the LiDAR
+    distance instead (more accurate, lower measurement noise).
 
 Why in Python, not C++:
     The Kalman filter needs LiDAR data (for matching) and runs between camera

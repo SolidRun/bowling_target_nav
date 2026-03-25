@@ -61,23 +61,25 @@ from geometry_msgs.msg import Twist, PointStamped
 
 # -- Speed scaling factors --
 # Multipliers applied to the user-configured linear_speed or min_linear_speed.
-# Lower values = slower motion for safety-critical phases.
-APPROACH_CREEP_FACTOR = 0.5       # min_speed multiplier at approach / arrival creep
-VFH_AVOIDANCE_SPEED_FACTOR = 0.6  # forward speed during VFH gap traversal
-EMERGENCY_BACKUP_FACTOR = 0.4     # reverse speed during emergency backup
-VFH_BACKUP_SPEED_FACTOR = 0.3     # reverse speed when no VFH gap found
-SLOWDOWN_MIN_FACTOR = 0.3         # minimum slowdown ratio in obstacle zone
-BLIND_OBSTACLE_SPEED_FACTOR = 0.3 # forward speed reduction near obstacle in blind approach
-SPIRAL_AVOIDANCE_SPEED_FACTOR = 0.5  # spiral search avoidance speed
+# Example: at APPROACH_CREEP_FACTOR=0.5 with min_speed=0.10, creep speed = 0.05 m/s.
+# Tuning: increase if robot is too cautious, decrease if it overshoots.
+APPROACH_CREEP_FACTOR = 0.5       # arrival creep: speed = min_speed * 0.5
+VFH_AVOIDANCE_SPEED_FACTOR = 0.6  # VFH gap traversal: speed = linear_speed * 0.6
+EMERGENCY_BACKUP_FACTOR = 0.4     # emergency reverse: speed = min_speed * 0.4
+VFH_BACKUP_SPEED_FACTOR = 0.3     # no-gap reverse: speed = min_speed * 0.3
+SLOWDOWN_MIN_FACTOR = 0.3         # obstacle zone floor: speed >= linear_speed * 0.3
+BLIND_OBSTACLE_SPEED_FACTOR = 0.3 # blind approach near obstacle: speed * 0.3
+SPIRAL_AVOIDANCE_SPEED_FACTOR = 0.5  # spiral near obstacle: speed * 0.5
 
 # -- Angular control --
-# Proportional gains and clamps for rotation commands in different phases.
-# GAIN controls how aggressively the robot turns toward the target angle.
-# CLAMP limits the maximum angular velocity to prevent overshooting.
-STEERING_ANGULAR_GAIN = 0.4       # proportional gain near target
-STEERING_ANGULAR_CLAMP = 0.2      # max abs angular vel near target
-ARRIVAL_ANGULAR_GAIN = 0.3        # proportional gain during arrival creep
-ARRIVAL_ANGULAR_CLAMP = 0.15      # max abs angular vel during arrival creep
+# Proportional steering: angular_vel = GAIN * angle_error_rad, clamped to ±CLAMP.
+# Higher GAIN → faster correction but risk of oscillation.
+# Lower GAIN → smoother but may not track fast-moving targets.
+# Tuned empirically for 0.20 m/s at 20 Hz control rate.
+STEERING_ANGULAR_GAIN = 0.4       # normal navigation: wz = 0.4 * error_rad
+STEERING_ANGULAR_CLAMP = 0.2      # max |wz| during normal navigation (rad/s)
+ARRIVAL_ANGULAR_GAIN = 0.3        # gentler gain during arrival creep
+ARRIVAL_ANGULAR_CLAMP = 0.15      # max |wz| during arrival creep (rad/s)
 VFH_FUSED_ANGULAR_FACTOR = 0.4    # angular speed factor when target visible during VFH
 VFH_FUSED_ANGULAR_GAIN = 0.5      # proportional gain for fused VFH steering
 VFH_ROTATE_ANGULAR_FACTOR = 0.3   # angular speed factor when rotating toward gap
@@ -88,10 +90,11 @@ BLIND_ANGULAR_CLAMP = 0.2         # max abs angular vel in blind approach
 BLIND_ANGULAR_GAIN = 0.5          # proportional gain in blind approach
 
 # -- Timing constants --
-# Durations and intervals that control temporal behavior: how long to
-# confirm arrival, how long to commit to an avoidance direction, etc.
-ARRIVAL_CONFIRM_SECS = 0.3        # seconds of sustained closeness for arrival
-ARRIVAL_HYSTERESIS_FACTOR = 1.5   # reset arrival timer when dist > threshold * this
+# Durations and intervals that control temporal behavior.
+# ARRIVAL_CONFIRM_SECS: at 0.15 m/s the robot crosses the 22cm arrival zone
+# in ~1.5s. A 0.3s confirmation catches it; 0.8s+ would miss it.
+ARRIVAL_CONFIRM_SECS = 0.3        # seconds distance must stay < threshold to confirm arrival
+ARRIVAL_HYSTERESIS_FACTOR = 1.5   # reset timer only when dist > threshold * 1.5 (prevents flicker)
 VFH_AVOID_COMMIT_SECS = 1.5      # seconds to commit to avoidance direction
 VFH_COMMIT_TARGET_SECS = 0.5     # shorter commit when target is visible
 VFH_STUCK_TIMEOUT_SECS = 3.0     # stuck backing up timeout
@@ -100,9 +103,9 @@ LOG_INTERVAL_SECS = 2.0          # minimum interval between repeated log message
 OBS_LOG_INTERVAL_SECS = 1.0      # minimum interval between obstacle log messages
 
 # -- Geometric / threshold constants --
-# Distances, margins, and scoring weights used by VFH gap-finding,
-# obstacle corridor checks, and the multi-signal arrival scorer.
-VFH_NUM_BINS = 36                 # number of polar histogram bins (5 deg each)
+# Distances, margins, and bin counts for VFH histogram, corridor checks,
+# and blind approach safety limits.
+VFH_NUM_BINS = 36                 # polar histogram bins: 360°/36 = 10° per bin
 AVOID_CLEAR_TICKS = 5             # consecutive clear ticks before resetting avoidance
 LIDAR_MIN_POINT_DIST = 0.03      # ignore LiDAR points closer than this (noise floor)
 VFH_CLEARANCE_MARGIN = 0.10      # extra margin added to obstacle_distance for gap check

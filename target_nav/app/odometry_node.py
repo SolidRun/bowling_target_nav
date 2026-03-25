@@ -21,8 +21,8 @@ Covariance strategy: Pose covariance grows linearly with accumulated
 distance traveled (``dist_factor = 1 + distance * 0.1``) to reflect
 mecanum wheel slip accumulation. Lateral (Y) covariance is 2x forward
 (X) because mecanum rollers slip more during strafing. Unused DOFs
-(z, roll, pitch) are set to 1e6 to signal Nav2/AMCL that those
-dimensions are unobserved.
+(z, roll, pitch) are set to 1e6 to signal downstream consumers that
+those dimensions are unobserved.
 
 Subscribed Topics:
     /arduino/odom_raw (std_msgs/String) -- JSON telemetry from driver node.
@@ -82,11 +82,11 @@ class OdometryNode(Node):
     Publishes ``/odom`` (nav_msgs/Odometry) with proper covariance
     matrices. Pose covariance grows with distance traveled to reflect
     mecanum wheel slip accumulation. Unused DOFs (z, roll, pitch) have
-    covariance set to 1e6 to tell Nav2/AMCL those dimensions are
-    meaningless.
+    covariance set to 1e6 to signal that those dimensions are
+    unobserved.
 
     Broadcasts ``odom -> base_link`` TF at 20 Hz (even without new data)
-    to keep Cartographer and Nav2 happy with fresh transforms.
+    to keep TF consumers (NavNode, GUI) supplied with fresh transforms.
 
     Subscribes to ``/reset_odom`` (std_msgs/Empty) to reset pose to origin.
 
@@ -106,7 +106,7 @@ class OdometryNode(Node):
     TWIST_COV_VYAW = 0.02    # Angular velocity
 
     # Very high covariance for unused DOFs (z, roll, pitch)
-    # Tells Nav2/AMCL these measurements are meaningless
+    # Signals downstream consumers these dimensions are unobserved
     UNUSED_COV = 1e6
 
     def __init__(self):
@@ -159,7 +159,7 @@ class OdometryNode(Node):
         # Reset odometry subscriber
         self.create_subscription(Empty, 'reset_odom', self._reset_odom_callback, 1)
 
-        # Publish at 20Hz even when no new data (Cartographer/Nav2 need fresh TF)
+        # Publish at 20Hz even when no new data (TF consumers need fresh transforms)
         self.publish_timer = self.create_timer(0.05, self._publish_odometry)
 
         self.get_logger().info(

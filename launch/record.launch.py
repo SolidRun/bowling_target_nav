@@ -20,6 +20,7 @@ from datetime import datetime
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 
 
@@ -46,7 +47,6 @@ def generate_launch_description():
         '/odom',                  # Odometry
         '/detections',            # Vision detections
         '/nav_state',             # Navigation state
-        '/nav_command',           # Navigation commands
         '/arduino/odom_raw',      # Raw Arduino odometry
         '/arduino/status',        # Arduino connection status
         '/diagnostics',           # System diagnostics
@@ -56,19 +56,28 @@ def generate_launch_description():
 
     # Build ros2 bag record command
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    cmd = [
+    base_cmd = [
         'ros2', 'bag', 'record',
         '--output', [LaunchConfiguration('bag_dir'), f'/v2n_{timestamp}'],
         '--max-bag-duration', '300',  # Split every 5 minutes
     ] + topics
 
     record_process = ExecuteProcess(
-        cmd=cmd,
+        cmd=base_cmd,
         output='screen',
+        condition=UnlessCondition(LaunchConfiguration('compress')),
+    )
+
+    record_compressed = ExecuteProcess(
+        cmd=base_cmd + ['--compression-mode', 'message',
+                        '--compression-format', 'zstd'],
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('compress')),
     )
 
     return LaunchDescription([
         bag_dir_arg,
         compress_arg,
         record_process,
+        record_compressed,
     ])

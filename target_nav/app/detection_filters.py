@@ -9,9 +9,30 @@ This tracker keeps outputting the last known detection for a configurable
 time after the last match, giving the Kalman filter in the nav process
 a continuous stream to work with.
 
+Parameters (from DEFAULT_TRACKER_FILTER in config.py):
+    min_hits (1):       Not used for gating — all matches output immediately.
+    max_age (45):       Max frames without a match before track is removed.
+                        At ~15 fps DRP-AI rate, 45 frames = ~3 seconds.
+    match_dist_px (150): Maximum bbox center distance (pixels) to consider
+                        a detection as matching an existing track. Generous
+                        to handle DRP-AI jitter between frames.
+    bbox_ema_alpha (0.3): Exponential moving average smoothing for bbox
+                        coordinates. Lower = smoother but more lag.
+    persist_time (3.0): Seconds to keep outputting a track's last known
+                        position after the model stops detecting it. Must
+                        match predict_timeout in DEFAULT_TRACKER_PARAMS so
+                        the Kalman filter and detection tracker expire together.
+
+Matching algorithm:
+    For each new detection, find the existing track whose bbox center is
+    closest (Euclidean distance in pixels). If distance < match_dist_px,
+    the detection is assigned to that track. Unmatched detections create
+    new tracks. Unmatched tracks coast (output last position with decaying
+    confidence) until max_age or persist_time expires.
+
 Data flow:
-  C++ DRP-AI binary -> shm / JSON -> [Det] -> DetectionTracker
-  -> persistent [Det] -> shared_state / navigator
+    C++ DRP-AI binary -> shm / JSON -> [Det] -> DetectionTracker
+    -> persistent [Det] -> shared_state / navigator
 """
 
 import math

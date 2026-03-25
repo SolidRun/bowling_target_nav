@@ -205,7 +205,7 @@ if [ "$SHOW_STATUS" = true ]; then
     [ -e /dev/video0 ]  && echo -e "  ${GREEN}●${NC} Camera (/dev/video0)" || echo -e "  ${RED}●${NC} Camera not found"
     echo ""
     echo "DRP-AI:"
-    [ -f /home/root/deploy/app_yolo_cam ] && echo -e "  ${GREEN}●${NC} app_yolo_cam found" || echo -e "  ${YELLOW}●${NC} app_yolo_cam not found (ONNX fallback)"
+    [ -f /home/root/deploy/app_yolo_cam ] && echo -e "  ${GREEN}●${NC} app_yolo_cam found" || echo -e "  ${RED}●${NC} app_yolo_cam not found (DRP-AI required)"
     echo ""
     exit 0
 fi
@@ -264,7 +264,7 @@ source /opt/ros/humble/setup.bash
 # ═══════════════════════════════════════════════════════════════════════
 step "Checking Python dependencies"
 
-for mod in serial onnxruntime; do
+for mod in serial; do
     if python3 -c "import $mod" 2>/dev/null; then
         ok "$mod already installed"
     else

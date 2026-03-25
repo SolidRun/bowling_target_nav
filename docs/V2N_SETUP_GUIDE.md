@@ -55,7 +55,7 @@ scp -r launch/ config/ urdf/ resource/ scripts/ test/ \
        root@192.168.50.1:/root/ros2_ws/src/target_nav/
 
 # Copy DRP-AI binary and model
-scp -r deploy/* root@192.168.50.1:/root/deploy/
+scp -r deploy/* root@192.168.50.1:/home/root/deploy/
 ```
 
 ---
@@ -75,7 +75,7 @@ This script does **everything** automatically:
 
 1. Installs Python dependencies (`pyserial`)
 2. Builds the ROS2 package with `colcon build`
-3. Deploys DRP-AI binary and libraries to `/usr/lib64/`
+3. Deploys DRP-AI binary and libraries to `/usr/lib/`
 4. Installs helper scripts (`gui.sh`, `launcher.py`, `remote_desktop.py`) to `/root/`
 5. Sets up WiFi Access Point (SSID: `RZV2N_Robot`, password: `robot1234`)
 6. Configures display rotation for DSI touchscreen
@@ -229,8 +229,13 @@ ros2 topic echo /detections        # See live detections
 | `/root/start.sh` | Symlink to bringup script |
 | `~/.config/target_nav/calibration.json` | Saved settings |
 | `/var/log/robot_autostart.log` | Boot log |
-| `/dev/shm/v2n_camera` | Live camera frame (shared memory) |
-| `/dev/shm/v2n_detections` | Detection results (shared memory) |
+| `/dev/shm/v2n_camera` | Live camera frame (C++ → GUI, mmap) |
+| `/dev/shm/v2n_detections` | C++ detection structs (C++ → Camera process) |
+| `/dev/shm/v2n_det` | Python detection structs (Camera → Nav + GUI) |
+| `/dev/shm/v2n_nav` | Nav state snapshot (Nav → GUI) |
+| `/dev/shm/v2n_laser` | LiDAR points + pose (Nav → GUI) |
+| `/dev/shm/v2n_cmd` | Command ring buffer (GUI → Nav) |
+| `/dev/shm/v2n_calibration` | Calibration params (Camera → C++) |
 
 ---
 
