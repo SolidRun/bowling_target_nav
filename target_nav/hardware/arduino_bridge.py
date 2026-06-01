@@ -24,6 +24,8 @@ Related modules:
     app/arduino_node.py   -- ArduinoDriverNode that owns this bridge.
 """
 
+import glob
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -75,12 +77,19 @@ class ArduinoBridge:
     VEL commands use mm/s and mrad/s units; the firmware converts to
     motor PWM internally using encoder feedback.
 
-    Auto-detection scans ``/dev/ttyACM*`` and ``/dev/ttyUSB*`` for known
-    Arduino vendor IDs (0x2341 Arduino, 0x1A86 CH340, 0x10C4 CP210x,
-    0x0403 FTDI).
+    Auto-detection probes ``/dev/ttyACM*`` and ``/dev/ttyUSB*`` ports and
+    keeps only the one that answers the firmware handshake (see
+    ``_probe_port``). Identity is decided by the handshake, NOT by USB
+    vendor ID -- so a peripheral that merely shares a USB-serial chip
+    (e.g. an RPLidar on a CP2102) is never mistaken for the Arduino.
+    The vendor-ID tiers below only set the *order* ports are probed in.
     """
 
-    ARDUINO_VIDS = [0x2341, 0x1A86, 0x10C4, 0x0403]
+    # VID tiers control probe ORDER only -- never device identity.
+    # Tier 1: chips used almost exclusively by Arduino boards.
+    VID_TIER1 = (0x2341, 0x2A03, 0x1A86)   # Arduino LLC, Arduino SRL, CH340
+    # Tier 2: generic USB-serial chips (could be an Arduino OR a peripheral).
+    VID_TIER2 = (0x10C4, 0x0403)           # CP210x, FTDI
 
     def __init__(
         self,
@@ -124,6 +133,18 @@ class ArduinoBridge:
     def is_connected(self) -> bool:
         return self._state == ArduinoState.CONNECTED
 
+    @property
+    def actual_port(self) -> Optional[str]:
+        """The serial device actually opened, or None if not connected.
+
+        Differs from ``config.port`` when ``find_arduino_port()`` auto-detected
+        a device other than the configured/default one. Use this (not
+        ``config.port``) for logging and status so the reported port reflects
+        the real hardware connection.
+        """
+        s = self._serial
+        return s.port if s is not None else None
+
     def _set_state(self, new_state: ArduinoState):
         """Transition to a new state and notify the callback if changed."""
         if new_state != self._state:
@@ -134,27 +155,110 @@ class ArduinoBridge:
                 except Exception:
                     pass
 
-    def find_arduino_port(self) -> Optional[str]:
-        """Auto-detect Arduino serial port by trying configured port, then VID match.
+    @staticmethod
+    def _port_in_use(device: str) -> bool:
+        """True if another process currently holds this serial device open.
+
+        Prevents the probe from opening a port already owned by another
+        driver (e.g. the lidar's rplidar_node), which would disrupt that
+        device mid-operation. This is what keeps Arduino auto-detection from
+        ever touching the lidar -- without hardcoding the lidar's port.
+
+        Best-effort: scans /proc/*/fd for an open handle to the device
+        (requires permission to read other processes' fds; the robot runs
+        as root). Returns False if it cannot determine usage.
+
+        Args:
+            device: Serial device path (e.g. '/dev/ttyUSB0').
+        """
+        try:
+            target = os.path.realpath(device)
+        except OSError:
+            return False
+        for fd in glob.glob('/proc/[0-9]*/fd/*'):
+            try:
+                if os.path.realpath(fd) == target:
+                    return True
+            except OSError:
+                continue  # fd vanished or permission denied -- ignore
+        return False
+
+    def _probe_port(self, device: str) -> bool:
+        """Open a port briefly and check whether it speaks the motor firmware.
+
+        Sends the harmless ``READ`` query (no motion) and accepts the port
+        only if the reply matches the firmware protocol. This is what tells
+        the Arduino apart from any other USB-serial device (e.g. the lidar),
+        independent of which USB-serial chip the board uses.
+
+        Args:
+            device: Serial device path to probe (e.g. '/dev/ttyUSB1').
 
         Returns:
-            Device path string (e.g. '/dev/ttyACM0') or None.
+            True if the device responded like the motor firmware.
         """
-        ports = list_ports.comports()
+        try:
+            probe = serial.Serial(
+                device, self.config.baudrate, timeout=0.3, write_timeout=0.3
+            )
+        except Exception:
+            return False
 
-        # Try configured port first
-        for port in ports:
-            if port.device == self.config.port:
-                return port.device
+        try:
+            time.sleep(2.0)              # boards that reset on open need to boot
+            probe.reset_input_buffer()
+            probe.write(b"READ\n")
+            probe.flush()
+            time.sleep(0.3)
+            reply = probe.read(256).decode("ascii", errors="ignore")
+            if any(tok in reply for tok in ("READY", "OK", "ODOM", "ENC", "DONE")):
+                return True
+            # Encoder reply is bare integers, one per line.
+            return any(
+                ln.strip().lstrip("-").isdigit()
+                for ln in reply.splitlines() if ln.strip()
+            )
+        except Exception:
+            return False
+        finally:
+            try:
+                probe.close()
+            except Exception:
+                pass
 
-        # Try known Arduino vendor IDs
-        for port in ports:
-            if port.vid in self.ARDUINO_VIDS:
-                return port.device
+    def find_arduino_port(self) -> Optional[str]:
+        """Find the serial port that actually speaks the motor firmware.
 
-        # Try common patterns
-        for port in ports:
-            if 'ACM' in port.device or 'USB' in port.device:
+        Probes candidate ports in priority order (configured port first,
+        then likely-Arduino chips, then generic serial chips) and returns
+        the FIRST one that answers the firmware handshake. Because identity
+        is confirmed by the handshake, a peripheral that shares a USB-serial
+        chip (e.g. the RPLidar) can never be selected -- and probing stops
+        as soon as the Arduino is found, so the lidar is normally never
+        touched.
+
+        Returns:
+            Device path string (e.g. '/dev/ttyUSB1') or None if nothing
+            responded like the firmware.
+        """
+        ports = list(list_ports.comports())
+
+        def rank(p):
+            if p.device == self.config.port:
+                return 0
+            if p.vid in self.VID_TIER1:
+                return 1
+            if p.vid in self.VID_TIER2:
+                return 2
+            return 3
+
+        for port in sorted(ports, key=rank):
+            # Never probe a port another process already owns (e.g. the lidar).
+            # Opening it would toggle DTR and inject bytes, disrupting that
+            # device. This is what keeps detection from ever touching the lidar.
+            if self._port_in_use(port.device):
+                continue
+            if self._probe_port(port.device):
                 return port.device
 
         return None

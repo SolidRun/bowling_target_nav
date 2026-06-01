@@ -10,7 +10,7 @@ Complete guide to deploy target_nav on a fresh RZ/V2N board.
 
 | Port | Device | Purpose |
 |------|--------|---------|
-| USB → `/dev/ttyACM0` | Arduino Mega | Motor control + encoder feedback |
+| USB → auto-detected (`ttyUSB*`/`ttyACM*`) | Arduino Mega | Motor control + encoder feedback (driver finds it by firmware handshake) |
 | USB → `/dev/ttyUSB0` | RPLidar A1 | 2D LiDAR scanner |
 | USB → `/dev/video0` | Camera | RGB video for DRP-AI detection |
 | DSI-1 | Touchscreen | GUI display (rotated 180°) |
@@ -262,8 +262,8 @@ journalctl -u robot -n 50
 
 ### Hardware not detected
 ```bash
-# Check USB devices
-ls -la /dev/ttyACM0 /dev/ttyUSB0 /dev/video0
+# Check USB devices (Arduino + LiDAR enumerate as ttyUSB*/ttyACM*; numbers vary)
+ls -la /dev/ttyUSB* /dev/ttyACM* /dev/video0
 
 # If missing, reconnect USB and check dmesg:
 dmesg | tail -20

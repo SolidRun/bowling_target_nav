@@ -38,14 +38,12 @@ pkill -9 -f "ros2 launch" 2>/dev/null
 sleep 1
 
 # ------------------------------------------------------------------
-# Step 2: Release serial ports
+# Step 2: Release serial ports (port-agnostic: any ttyUSB*/ttyACM*)
 # ------------------------------------------------------------------
-fuser -k /dev/ttyACM0 2>/dev/null
-fuser -k /dev/ttyUSB0 2>/dev/null
+fuser -k /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
 sleep 2
 # Double-check — kill any process still holding the ports
-fuser -k -9 /dev/ttyACM0 2>/dev/null
-fuser -k -9 /dev/ttyUSB0 2>/dev/null
+fuser -k -9 /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
 sleep 1
 
 # ------------------------------------------------------------------
@@ -67,19 +65,31 @@ export WAYLAND_DISPLAY=wayland-1
 # ------------------------------------------------------------------
 # Step 5: Wait for hardware (max 15 seconds)
 # ------------------------------------------------------------------
-echo "Waiting for hardware..."
-for i in {1..15}; do
-    ARDUINO_OK=false; LIDAR_OK=false
-    [ -e /dev/ttyACM0 ] && ARDUINO_OK=true
-    [ -e /dev/ttyUSB0 ] && LIDAR_OK=true
-    if $ARDUINO_OK && $LIDAR_OK; then
+# Port-agnostic: we don't care which numbers the lidar/Arduino enumerated
+# as (ttyUSB0/1, ttyACM0, ...). We just wait until at least 2 USB-serial
+# devices are present (lidar + Arduino); the drivers auto-detect which is
+# which. Camera is optional.
+# List present USB-serial devices via globs (no `ls`; safe on no-match).
+serial_devs() {
+    local d out=""
+    for d in /dev/ttyUSB* /dev/ttyACM*; do
+        [ -e "$d" ] && out="$out $d"
+    done
+    echo "$out"
+}
+
+echo "Waiting for serial hardware..."
+for _ in $(seq 1 15); do
+    # shellcheck disable=SC2046  # word-splitting the device list is intended
+    if [ $(serial_devs | wc -w) -ge 2 ]; then
         break
     fi
     sleep 1
 done
 
-$ARDUINO_OK && echo "[OK] Arduino (/dev/ttyACM0)" || echo "[WARN] Arduino not found"
-$LIDAR_OK   && echo "[OK] LiDAR (/dev/ttyUSB0)"   || echo "[WARN] LiDAR not found"
+SERIAL_DEVS=$(serial_devs)
+[ -n "$SERIAL_DEVS" ] && echo "[OK] Serial devices:$SERIAL_DEVS" \
+                      || echo "[WARN] No USB-serial devices found"
 [ -e /dev/video0 ] && echo "[OK] Camera (/dev/video0)" || echo "[WARN] Camera not found"
 
 # ------------------------------------------------------------------
@@ -92,7 +102,7 @@ cleanup() {
         pkill -9 -f "$proc" 2>/dev/null
     done
     pkill -9 -f "ros2 launch" 2>/dev/null
-    fuser -k /dev/ttyACM0 /dev/ttyUSB0 2>/dev/null
+    fuser -k /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
     echo "Cleanup done"
 }
 trap cleanup EXIT

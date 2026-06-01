@@ -85,9 +85,8 @@ pkill -f "arduino_driver" 2>/dev/null || true
 pkill -f "rplidar" 2>/dev/null || true
 sleep 1
 
-# Release devices
-fuser -k /dev/ttyACM0 2>/dev/null || true
-fuser -k /dev/ttyUSB0 2>/dev/null || true
+# Release devices (port-agnostic: any ttyUSB*/ttyACM*)
+fuser -k /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || true
 sleep 1
 echo -e "${GREEN}[OK]${NC} Cleanup complete"
 
@@ -97,18 +96,16 @@ echo -e "${GREEN}[OK]${NC} Cleanup complete"
 echo ""
 echo "Checking hardware..."
 
-# Check Arduino
-if [ -e /dev/ttyACM0 ]; then
-    echo -e "${GREEN}[OK]${NC} Arduino found at /dev/ttyACM0"
+# Port-agnostic: we don't care which numbers the lidar/Arduino enumerated as;
+# the drivers auto-detect. Just report which USB-serial devices are present.
+SERIAL_DEVS=""
+for d in /dev/ttyUSB* /dev/ttyACM*; do
+    [ -e "$d" ] && SERIAL_DEVS="$SERIAL_DEVS $d"
+done
+if [ -n "$SERIAL_DEVS" ]; then
+    echo -e "${GREEN}[OK]${NC} USB-serial devices:$SERIAL_DEVS"
 else
-    echo -e "${YELLOW}[WARN]${NC} Arduino not found at /dev/ttyACM0"
-fi
-
-# Check LiDAR
-if [ -e /dev/ttyUSB0 ]; then
-    echo -e "${GREEN}[OK]${NC} LiDAR found at /dev/ttyUSB0"
-else
-    echo -e "${YELLOW}[WARN]${NC} LiDAR not found at /dev/ttyUSB0"
+    echo -e "${YELLOW}[WARN]${NC} No USB-serial devices found"
 fi
 
 # ============================================================================

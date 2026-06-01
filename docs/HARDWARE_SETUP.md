@@ -95,20 +95,34 @@ Wheel indices (firmware order):
 
 | Device | Port | Baud Rate | Protocol |
 |--------|------|-----------|----------|
-| Arduino | `/dev/ttyACM0` | 115200 | Plain text commands |
-| LiDAR | `/dev/ttyUSB0` | 115200 | rplidar protocol |
+| Arduino | auto-detected (e.g. `/dev/ttyUSB1` or `/dev/ttyACM0`) | 115200 | Plain text commands |
+| LiDAR | `/dev/ttyUSB0` (rplidar driver) | 115200 | rplidar protocol |
 | Camera | `/dev/video0` | — | V4L2 video |
+
+> The Arduino port is **not fixed**. Whichever number it enumerates as
+> (`ttyUSB*` or `ttyACM*`) depends on the USB-serial chip and plug order;
+> the driver finds it automatically (see below). The startup/runtime scripts
+> are port-agnostic and never hardcode a specific number.
 
 ### Arduino Auto-Detection
 
-The system can auto-detect the Arduino by USB VID/PID:
+The Arduino is identified by a **firmware handshake**, not by USB vendor ID.
+`ArduinoBridge.find_arduino_port()` ([hardware/arduino_bridge.py](../target_nav/hardware/arduino_bridge.py)) probes candidate serial ports and keeps only the one that **answers the firmware protocol**:
 
-| Manufacturer | VID |
-|-------------|-----|
-| Arduino | 0x2341 |
-| QinHeng (CH340) | 0x1A86 |
-| Silicon Labs (CP210x) | 0x10C4 |
-| FTDI | 0x0403 |
+1. **Skip busy ports.** Any port already held open by another process (checked
+   via `/proc/*/fd`) is skipped — this is what stops the probe from ever
+   opening the lidar's port and disrupting it.
+2. **Probe in priority order.** The configured port first, then likely-Arduino
+   chips (`VID_TIER1` = Arduino `0x2341`/`0x2A03`, CH340 `0x1A86`), then generic
+   serial chips (`VID_TIER2` = CP210x `0x10C4`, FTDI `0x0403`). VIDs only set the
+   probe *order* — they never decide identity.
+3. **Handshake test.** `_probe_port()` opens the port, sends `READ`, and accepts
+   it only if the reply looks like the firmware (`READY`/`OK`/`ODOM`/`ENC`/`DONE`
+   or bare encoder integers).
+
+This means a peripheral that merely shares a USB-serial chip (e.g. an RPLidar on
+a CP2102) is never mistaken for the Arduino, regardless of port numbering. The
+actually-opened device is reported on `/arduino/status` and in the connect log.
 
 ### Motor Shield I2C
 
@@ -310,7 +324,7 @@ Step 2: ROS2 NODE CONVERTS AND SENDS
     c. ArduinoBridge (arduino_bridge.py):
        - Deadzone check: all values >= 3 -> not zero, proceed
        - Builds ASCII: "VEL,200,0,300\n"
-       - Writes to /dev/ttyACM0 (USB serial, 115200 baud)
+       - Writes to the auto-detected Arduino port (USB serial, 115200 baud)
 
 Step 3: FIRMWARE PARSES COMMAND
 ───────────────────────────────
@@ -650,13 +664,12 @@ wz = (-FL + FR - RL + RR) / (4 * L) * wheel_radius
 ### Verify All Devices
 
 ```bash
-# Check all devices exist
-ls -la /dev/ttyACM0 /dev/ttyUSB0 /dev/video0
+# List all USB-serial devices (Arduino + LiDAR enumerate here; numbers vary).
+# Identify which is which by chip: cp210x = LiDAR, ch341/Arduino = motor board.
+ls -la /dev/ttyUSB* /dev/ttyACM* /dev/video0
+dmesg | grep -iE "cp210|ch34|ttyACM|ttyUSB"
 
-# Check Arduino
-stty -F /dev/ttyACM0 115200
-
-# Check LiDAR
+# Check a serial port responds (substitute the real port from above)
 stty -F /dev/ttyUSB0 115200
 
 # Check Camera
@@ -666,17 +679,17 @@ v4l2-ctl --device=/dev/video0 --all
 ### Arduino Not Responding
 
 ```bash
-# Check if port exists
-ls /dev/ttyACM*
+# List USB-serial ports (Arduino is whichever speaks the firmware protocol)
+ls /dev/ttyUSB* /dev/ttyACM*
 
-# Check process using the port
-fuser /dev/ttyACM0
+# Check what process is using a port
+fuser /dev/ttyUSB* /dev/ttyACM*
 
-# Kill process and retry
-fuser -k /dev/ttyACM0
+# Kill processes holding the ports and retry
+fuser -k /dev/ttyUSB* /dev/ttyACM*
 
-# Test manually
-screen /dev/ttyACM0 115200
+# Test manually (substitute the Arduino's real port)
+screen /dev/ttyUSB1 115200
 # Type: STOP (should get DONE)
 # Type: READ (should get 4 encoder values)
 # Exit: Ctrl+A, then K

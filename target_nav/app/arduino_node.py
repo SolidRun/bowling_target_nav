@@ -270,9 +270,19 @@ class ArduinoDriverNode(Node):
         self.bridge.start()
 
         self.get_logger().info(
-            f'Arduino driver started - port: {self.serial_port}, '
-            f'rate: {self.command_rate}Hz'
+            f'Arduino driver started - configured port: {self.serial_port} '
+            f'(auto-detect may select another), rate: {self.command_rate}Hz'
         )
+
+    def _report_port(self) -> str:
+        """Return the device the bridge actually opened, for logs/status.
+
+        Auto-detection may select a device other than the configured
+        ``serial_port`` (e.g. when the default doesn't exist). Prefer the
+        bridge's real port; fall back to the configured value before the
+        first connection completes.
+        """
+        return self.bridge.actual_port or self.serial_port
 
     def _declare_parameters(self):
         """Declare all ROS2 parameters with their default values."""
@@ -364,16 +374,17 @@ class ArduinoDriverNode(Node):
         self._current_state = new_state
 
         # Publish as JSON so any subscriber can parse it
+        port = self._report_port()
         status_msg = String()
         status_msg.data = json.dumps({
             'state': new_state.value,       # e.g. "connected", "error"
-            'port': self.serial_port,       # e.g. "/dev/ttyACM0"
+            'port': port,                   # actually-opened device (auto-detected)
             'timestamp': time.time()
         })
         self.status_pub.publish(status_msg)
 
         if new_state == ArduinoState.CONNECTED:
-            self.get_logger().info(f"Connected to Arduino on {self.serial_port}")
+            self.get_logger().info(f"Connected to Arduino on {port}")
         elif new_state == ArduinoState.ERROR:
             self.get_logger().warning("Arduino connection error - will retry")
         elif new_state == ArduinoState.DISCONNECTED:
@@ -444,7 +455,7 @@ class ArduinoDriverNode(Node):
 
         status = DiagnosticStatus()
         status.name = "Arduino Driver"
-        status.hardware_id = self.serial_port
+        status.hardware_id = self._report_port()
 
         # Map our connection state to the standard diagnostic levels
         if self._current_state == ArduinoState.CONNECTED:
@@ -465,7 +476,7 @@ class ArduinoDriverNode(Node):
         stats = self.bridge.stats
         status.values = [
             KeyValue(key="state", value=self._current_state.value),
-            KeyValue(key="port", value=self.serial_port),
+            KeyValue(key="port", value=self._report_port()),
             KeyValue(key="tx_count", value=str(stats['tx_count'])),
             KeyValue(key="rx_count", value=str(stats['rx_count'])),
             KeyValue(key="errors", value=str(stats['errors'])),

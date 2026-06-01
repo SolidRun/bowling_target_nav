@@ -44,16 +44,39 @@ rm -f /dev/shm/v2n_nav /dev/shm/v2n_laser /dev/shm/v2n_det /dev/shm/v2n_cmd
 rm -f /dev/shm/v2n_bridge_laser /dev/shm/v2n_bridge_nav /dev/shm/v2n_bridge_det /dev/shm/v2n_bridge_cmd
 
 # ------------------------------------------------------------------
-# Step 3: Check if bringup is already running
+# Step 3: Ensure bringup is running -- WITHOUT racing robot.service
 # ------------------------------------------------------------------
+# robot.service (autostart.sh) is the authoritative bringup owner. Its
+# startup is slow (sleep 3 + up to 15s hardware wait + sleep 4), so checking
+# for child nodes like rplidar_node races against it and would (a) start a
+# SECOND bringup and (b) run `fuser -k /dev/ttyUSB0`, killing the lidar the
+# service just started. Instead: if the service is active, DEFER to it --
+# wait for its nodes and never launch or fuser-kill anything ourselves.
 STARTED_BRINGUP=false
 
-if pgrep -f "rplidar_node" > /dev/null 2>&1 && pgrep -f "arduino_driver" > /dev/null 2>&1; then
-    echo "[gui] Bringup already running (robot.service)"
+if systemctl is-active --quiet robot.service; then
+    echo "[gui] robot.service is active -- it owns bringup; waiting for nodes..."
+    READY=false
+    for _ in $(seq 1 40); do
+        if pgrep -f "rplidar_node" > /dev/null 2>&1 \
+           && pgrep -f "arduino_driver" > /dev/null 2>&1; then
+            READY=true
+            break
+        fi
+        sleep 1
+    done
+    if $READY; then
+        echo "[gui] Bringup ready (robot.service)"
+    else
+        echo "[gui] WARN: robot.service active but bringup nodes not up after 40s"
+        echo "[gui]       check: systemctl status robot.service"
+    fi
 else
-    echo "[gui] Starting bringup..."
-    # Release serial ports from any dead processes
-    fuser -k /dev/ttyACM0 /dev/ttyUSB0 2>/dev/null
+    echo "[gui] robot.service not active -- starting bringup ourselves..."
+    # Safe to release ALL USB-serial ports here (no service-owned bringup
+    # exists). Port-agnostic: covers both ttyUSB* and ttyACM* regardless of
+    # which number the lidar/Arduino enumerated as.
+    fuser -k /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
     sleep 0.5
 
     ros2 launch target_nav bringup.launch.py > /tmp/bringup.log 2>&1 &

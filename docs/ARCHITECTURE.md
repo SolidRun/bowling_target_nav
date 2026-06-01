@@ -148,9 +148,9 @@ No locks, no mutexes, no CAS. The SPSC invariant guarantees correctness.
       -> Calls bridge.send_velocity(vx_mm, vy_mm, wz_mrad)
    c. _arduino_cmd_callback sets _vel_mode=False, forwards raw command to firmware
       (FWD,100,1719 / TMOTOR,FL,100 / CALIB / STOP)
-   d. ArduinoBridge writes command to USB serial (/dev/ttyACM0)
+   d. ArduinoBridge writes command to USB serial (auto-detected port, e.g. /dev/ttyACM0)
 
-5. Arduino firmware (on Arduino Mega via USB /dev/ttyACM0)
+5. Arduino firmware (on Arduino Mega via auto-detected USB serial port)
    a. serial_cmd.cpp parses "VEL,200,0,300" -> Command{VELOCITY, vx=200, vy=0, wz=300}
    b. robot.cpp handleCommand(VELOCITY):
       -> Mecanum::computeFromVelocity(200, 0, 300, tickRates[])
