@@ -128,13 +128,15 @@ def _make_estimator(shared_state=None):
     ref_height = DEFAULT_REF_BOX_HEIGHT
     ref_distance = DEFAULT_REF_DISTANCE
     fov = DEFAULT_CAMERA_FOV
+    flip_h = False
     if shared_state is not None:
         ref_height, ref_distance = shared_state.detection.get_calibration()
         fov = shared_state.detection.get_camera_fov()
     return DistanceEstimator(
         reference_box_height=ref_height, reference_distance=ref_distance,
         frame_width=DEFAULT_FRAME_W, frame_height=DEFAULT_FRAME_H,
-        horizontal_fov=fov)
+        horizontal_fov=fov,
+        flip_horizontal=flip_h)
 
 
 _cal_writer = None
@@ -147,6 +149,7 @@ def _sync_calibration(estimator, shared_state):
     Returns True if calibration was updated.
     """
     global _cal_writer
+    estimator.flip_horizontal = shared_state.detection.get_camera_flip_h()
     if shared_state.detection.is_calibration_dirty():
         ref_height, ref_distance = shared_state.detection.get_calibration()
         fov = shared_state.detection.get_camera_fov()
@@ -155,6 +158,7 @@ def _sync_calibration(estimator, shared_state):
         estimator.horizontal_fov = fov
         estimator._fov_rad = math.radians(fov)
         estimator._focal_length = (estimator.frame_width / 2.0) / math.tan(estimator._fov_rad / 2.0)
+        estimator.flip_horizontal = shared_state.detection.get_camera_flip_h() 
         logger.info("Calibration updated: %spx at %sm, FOV=%s\u00b0", ref_height, ref_distance, fov)
 
         # Write calibration to shared memory for C++ DRP-AI

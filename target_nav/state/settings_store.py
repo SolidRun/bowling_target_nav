@@ -60,6 +60,7 @@ from target_nav.config import (
     DEFAULT_CAMERA,
     DEFAULT_CAMERA_FOV,
     DEFAULT_CAMERA_YAW,
+    DEFAULT_CAMERA_FLIP_H,
     DEFAULT_DETECT_PARAMS,
     DEFAULT_DRPAI_PARAMS,
     DEFAULT_FRAME_H,
@@ -262,6 +263,7 @@ class SettingsStore:
         self._lidar_yaw: float = DEFAULT_LIDAR_YAW
         self._camera: dict = dict(DEFAULT_CAMERA)
         self._camera_yaw: float = DEFAULT_CAMERA_YAW
+        self._camera_flip_h: bool = DEFAULT_CAMERA_FLIP_H 
         self._target: dict = dict(DEFAULT_TARGET)
         self._ref_point: str = DEFAULT_REF_POINT
 
@@ -566,7 +568,13 @@ class SettingsStore:
             finally:
                 self._release()
         return DEFAULT_CAMERA_YAW
+    def set_camera_flip_h(self, flip: bool) -> None:
+        with self._lock:
+            self._camera_flip_h = bool(flip)
 
+    def get_camera_flip_h(self) -> bool:
+        with self._lock:
+            return self._camera_flip_h
     def set_target_dims(self, height: float, width: float) -> None:
         """Set real-world target dimensions and mark calibration dirty.
 
@@ -997,6 +1005,7 @@ class SettingsStore:
                         'lidar_yaw': self._lidar_yaw,
                         'camera_pos': dict(self._camera),
                         'camera_yaw': self._camera_yaw,
+                        'camera_flip_h': self._camera_flip_h,
                         'camera_fov': self._camera_fov,
                         'target': dict(self._target),
                         'ref_point': self._ref_point,
@@ -1144,6 +1153,8 @@ class SettingsStore:
             if 'camera_yaw' in data:
                 self._camera_yaw = vp('camera_yaw',
                     data['camera_yaw'], DEFAULT_CAMERA_YAW)
+            if 'camera_flip_h' in data:                                        
+                self._camera_flip_h = bool(data['camera_flip_h'])                   
             if 'target' in data:
                 t = data['target']
                 self._target = {

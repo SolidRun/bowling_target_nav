@@ -72,6 +72,7 @@ DEFAULT_LIDAR_YAW = 180.0   # LiDAR mounting angle (degrees)
 
 DEFAULT_CAMERA = {'x': 0.15, 'y': 0.0, 'z': 0.10}
 DEFAULT_CAMERA_YAW = 0.0    # camera mounting angle (degrees) relative to robot forward
+DEFAULT_CAMERA_FLIP_H = False  # horizontal flip — set True if camera mounted mirrored
 
 # ---------------------------------------------------------------------------
 # Camera optics defaults

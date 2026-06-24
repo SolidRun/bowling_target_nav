@@ -61,7 +61,7 @@ def _frame_to_surface(frame):
 
     Returns:
         cairo.ImageSurface (FORMAT_ARGB32) backed by the converted array.
-    """
+    """ 
     h, w = frame.shape[:2]
     # Create a proper Cairo-owned surface (no external buffer management)
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
@@ -139,6 +139,8 @@ def draw_camera_panel(cr, x, y, w, h, state):
                 _frame_cache['surface'] is not None):
             surface = _frame_cache['surface']
         else:
+            if state.detection.get_camera_flip_h():
+                frame = frame[:, ::-1, :]
             surface = _frame_to_surface(frame)
             _frame_cache['frame_id'] = cur_frame_id
             _frame_cache['surface'] = surface
@@ -159,6 +161,8 @@ def draw_camera_panel(cr, x, y, w, h, state):
         if detections and det_age < state.detection.get_detect_expiry():
             for det in detections:
                 x1, y1, x2, y2 = det.bbox
+                if state.detection.get_camera_flip_h():  
+                    x1, x2 = fw - x2, fw - x1  
                 if det.bbox_clipped:
                     cr.set_source_rgba(1.0, 0.8, 0.0, 0.8)  # yellow for clipped
                 else:

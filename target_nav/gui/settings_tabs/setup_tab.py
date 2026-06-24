@@ -238,6 +238,12 @@ class SetupTabMixin:
             'camera_yaw', "Camera Yaw",
             det.get_camera_yaw(),
             self._on_camera_yaw_changed), False, False, 0)
+        
+        box.pack_start(self._make_switch_row(  
+            'camera_flip_h', "Mirror image",
+            det.get_camera_flip_h(),
+            lambda v: (self._state.detection.set_camera_flip_h(v),
+                    self._schedule_save())), False, False, 0)
 
         # -- Robot diagram (compact) --
         self._robot_da = Gtk.DrawingArea()

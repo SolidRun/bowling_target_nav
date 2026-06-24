@@ -128,7 +128,7 @@ class NavTabMixin:
         self._add_nav_slider(approach_box, "LiDAR Stop (m)", 0.05, 0.30, 0.01,
                              DEFAULT_NAV_PARAMS['blind_approach_lidar_stop'],
                              'blind_approach_lidar_stop')
-        self._add_nav_slider(approach_box, "Arrival Margin (m)", 0.03, 0.30, 0.01,
+        self._add_nav_slider(approach_box, "Arrival Margin (m)", 0.03, 0.60, 0.01,
                              DEFAULT_NAV_PARAMS['blind_approach_arrival_margin'],
                              'blind_approach_arrival_margin')
         approach_box.pack_start(self._make_reset_row(

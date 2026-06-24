@@ -173,7 +173,9 @@ class _CameraStateAdapter:
     def get_camera_fov(self):
         """Return the camera horizontal FOV in degrees."""
         return self._store.get_camera_fov()
-
+    def get_camera_flip_h(self):
+        """Return True if camera image should be flipped horizontally."""
+        return self._store.get_camera_flip_h()
     def get_confidence_threshold(self):
         """Return the minimum detection confidence threshold (0.0--1.0)."""
         return self._store.get_confidence_threshold()

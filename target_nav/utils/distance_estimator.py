@@ -84,7 +84,8 @@ class DistanceEstimator:
                  reference_distance: float = DEFAULT_REF_DISTANCE,
                  frame_width: int = DEFAULT_FRAME_W,
                  frame_height: int = DEFAULT_FRAME_H,
-                 horizontal_fov: float = DEFAULT_CAMERA_FOV):
+                 horizontal_fov: float = DEFAULT_CAMERA_FOV,
+                 flip_horizontal: bool = False):
         """Initialize estimator and precompute focal length.
 
         Args:
@@ -104,7 +105,7 @@ class DistanceEstimator:
         self.frame_width = frame_width
         self.frame_height = frame_height
         self.horizontal_fov = horizontal_fov
-
+        self.flip_horizontal = flip_horizontal
         # Precompute constants used by estimate() and get_normalized_position()
         self._fov_rad = math.radians(horizontal_fov)
         self._half_width = frame_width / 2.0
@@ -138,7 +139,9 @@ class DistanceEstimator:
         # Object center X relative to frame center
         center_x = detection.center[0]
         offset_x = center_x - self._half_width
-
+        if self.flip_horizontal:       
+            offset_x = -offset_x     
+        angle = math.atan2(offset_x, self._focal_length)
         # Angle = atan(offset / focal_length)
         angle = math.atan2(offset_x, self._focal_length)
 
